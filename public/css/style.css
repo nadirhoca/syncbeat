@@ -1,0 +1,159 @@
+/* SyncBeat Custom Aesthetics & Animation Styles */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #09090b;
+  color: #f4f4f5;
+  overflow-x: hidden;
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Custom Smooth Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Glassmorphism Classes */
+.glass-panel {
+  background: rgba(18, 18, 22, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-card {
+  background: rgba(24, 24, 30, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Pulsating Equalizer Animation */
+.equalizer-bar {
+  width: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(to top, #8b5cf6, #d946ef);
+  animation-duration: 1.2s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+  transform-origin: bottom;
+}
+
+.equalizer-playing .bar-1 {
+  animation-name: eq-bounce-1;
+  animation-delay: 0.1s;
+}
+.equalizer-playing .bar-2 {
+  animation-name: eq-bounce-2;
+  animation-delay: 0.3s;
+}
+.equalizer-playing .bar-3 {
+  animation-name: eq-bounce-3;
+  animation-delay: 0.2s;
+}
+.equalizer-playing .bar-4 {
+  animation-name: eq-bounce-4;
+  animation-delay: 0.4s;
+}
+.equalizer-playing .bar-5 {
+  animation-name: eq-bounce-2;
+  animation-delay: 0.15s;
+}
+
+.equalizer-paused .equalizer-bar {
+  height: 4px !important;
+  animation: none !important;
+  opacity: 0.4;
+}
+
+@keyframes eq-bounce-1 {
+  0%, 100% { height: 6px; }
+  50% { height: 22px; }
+}
+
+@keyframes eq-bounce-2 {
+  0%, 100% { height: 16px; }
+  50% { height: 6px; }
+}
+
+@keyframes eq-bounce-3 {
+  0%, 100% { height: 4px; }
+  50% { height: 26px; }
+}
+
+@keyframes eq-bounce-4 {
+  0%, 100% { height: 18px; }
+  50% { height: 10px; }
+}
+
+/* Pulsing Neon Glow */
+.glow-violet {
+  box-shadow: 0 0 25px -5px rgba(139, 92, 246, 0.3);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 20px -5px rgba(16, 185, 129, 0.3);
+}
+
+/* Range Input Stylings */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: #27272a;
+  height: 6px;
+  border-radius: 9999px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  background: #a855f7;
+  height: 16px;
+  width: 16px;
+  border-radius: 9999px;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+  transition: transform 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: #c084fc;
+}
+
+/* Toast notifications */
+.toast-enter {
+  transform: translateY(-20px);
+  opacity: 0;
+}
+.toast-active {
+  transform: translateY(0);
+  opacity: 1;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}

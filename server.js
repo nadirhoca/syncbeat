@@ -1,973 +1,479 @@
 /**
- * SyncBeat - Real-Time Synchronized Music Room Server
- * Built with Node.js, Express, and Socket.io.
- *
- * Implements:
- * 1. Server-authoritative synchronization engine (elapsedSeconds = (Date.now() - startedAt) / 1000).
- * 2. 10-second periodic sync heartbeat to maintain ±1s sync across clients.
- * 3. First-come, first-served track change logic with 500ms race condition lockout.
- * 4. Sliding-window anti-abuse rate limiter (max 2 track changes per 60 seconds per client).
- * 5. Room creation (Admin) & Room joining (Guest) with password protection.
+ * SyncBeat - Full-Stack Real-Time Synchronized Music Room Web Application
+ * Express + Socket.io Server (Server-Authoritative Synchronization Engine)
  */
 
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const express = require('express');
+const cors = require('cors');
+const { Server } = require('socket.io');
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const roomManager = require('./src/roomManager');
+const SlidingWindowRateLimiter = require('./src/rateLimiter');
+const { extractVideoId, fetchVideoMetadata } = require('./src/youtubeHelper');
 
 const app = express();
 const server = http.createServer(app);
+
+// CORS enabled Socket.io server
 const io = new Server(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST'],
-  },
+    methods: ['GET', 'POST']
+  }
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-// Serve static frontend assets from /dist or /public directory
-const distDir = path.join(__dirname, 'dist');
-const publicDir = path.join(__dirname, 'public');
+// Rate limiter: 2 actions per 15-second sliding window per socket/IP
+const actionRateLimiter = new SlidingWindowRateLimiter(2, 15000);
 
-if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
-}
-app.use(express.static(publicDir));
+app.use(cors());
 app.use(express.json());
 
-const DATA_DIR = path.join(__dirname, 'data');
-const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch (e) {}
-}
-
-/**
- * In-memory room store.
- * Key: roomName (lowercase)
- * Value: RoomState object
- */
-const rooms = new Map();
-
-/**
- * Map socket ID to user session info: { roomName, nickname, role, socketId }
- */
-const socketToUser = new Map();
-
-// Helper to compile active rooms list
-function getActiveRoomsList() {
-  const list = [];
-  for (const [key, room] of rooms.entries()) {
-    list.push({
-      name: room.name,
-      normalizedName: key,
-      listenersCount: room.users ? room.users.size : 0,
-      currentTitle: room.currentTitle || 'Chill Music Stream',
-      currentAuthor: room.currentAuthor || 'YouTube',
-      currentThumbnail: room.currentThumbnail || `https://img.youtube.com/vi/${room.currentVideoId}/hqdefault.jpg`,
-      currentVideoId: room.currentVideoId,
-      isPlaying: room.isPlaying !== false,
-    });
+// Helper function to build pre-rendered rooms HTML for zero-latency initial render
+function renderRoomsHtml(rooms) {
+  if (!rooms || rooms.length === 0) {
+    return `
+      <div class="col-span-full p-8 text-center rounded-2xl border border-zinc-800/80 bg-zinc-900/40 backdrop-blur-md">
+        <p class="text-zinc-400 font-medium">No active rooms found. Be the first to create one!</p>
+      </div>
+    `;
   }
-  return list;
+
+  return rooms.map(room => {
+    const isLive = room.isPlaying;
+    const count = room.listenerCount || 0;
+    const safeName = escapeHtml(room.name);
+    const safeTitle = escapeHtml(room.currentTitle || 'Unknown Track');
+    const safeAuthor = escapeHtml(room.currentAuthor || 'SyncBeat Stream');
+    const safeNorm = encodeURIComponent(room.normalizedName);
+    const thumb = room.currentThumbnail || `https://img.youtube.com/vi/${room.currentVideoId}/hqdefault.jpg`;
+
+    return `
+      <div class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm" data-room="${safeNorm}">
+        <div>
+          <!-- Thumbnail & Status -->
+          <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
+            <img src="${thumb}" alt="${safeTitle}" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+            <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
+            
+            <!-- Live Badge & Listener Count -->
+            <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold backdrop-blur-md ${isLive ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}">
+              <span class="relative flex h-2 w-2">
+                ${isLive ? '<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>' : ''}
+                <span class="relative inline-flex rounded-full h-2 w-2 ${isLive ? 'bg-emerald-500' : 'bg-amber-500'}"></span>
+              </span>
+              <span>${isLive ? 'LIVE' : 'PAUSED'}</span>
+            </div>
+
+            <div class="absolute top-2.5 right-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-zinc-300 backdrop-blur-md border border-white/10">
+              <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+              <span class="listener-count-badge">${count} listener${count === 1 ? '' : 's'}</span>
+            </div>
+
+            <!-- Track Info overlay -->
+            <div class="absolute bottom-2.5 left-2.5 right-2.5">
+              <p class="truncate text-sm font-semibold text-white drop-shadow">${safeTitle}</p>
+              <p class="truncate text-xs text-zinc-300 drop-shadow">${safeAuthor}</p>
+            </div>
+          </div>
+
+          <!-- Room Title & Queue Info -->
+          <div class="mt-3.5 flex items-center justify-between">
+            <h3 class="text-base font-bold text-white group-hover:text-violet-300 transition-colors">${safeName}</h3>
+            <span class="text-xs text-zinc-400 font-mono">${room.queueCount || 0} in queue</span>
+          </div>
+        </div>
+
+        <!-- Join Button -->
+        <div class="mt-4 pt-3 border-t border-zinc-800/60">
+          <button onclick="window.SyncBeatApp.joinRoom('${safeNorm}')" class="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600/20 py-2 text-sm font-semibold text-violet-300 border border-violet-500/30 transition-all hover:bg-violet-600 hover:text-white hover:border-violet-600 hover:shadow-lg hover:shadow-violet-600/25 active:scale-[0.98]">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+            Tune In Now
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('\n');
 }
 
-function saveRoomsToDisk() {
-  try {
-    const list = [];
-    for (const [key, r] of rooms.entries()) {
-      list.push({
-        name: r.name,
-        normalizedName: key,
-        currentVideoId: r.currentVideoId,
-        currentTitle: r.currentTitle,
-        currentAuthor: r.currentAuthor,
-        currentThumbnail: r.currentThumbnail,
-        startedAt: r.startedAt,
-        isPlaying: r.isPlaying,
-        pausedAt: r.pausedAt,
-        duration: r.duration,
-        playlist: r.playlist || [],
-        createdAt: r.createdAt || Date.now(),
-      });
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Pre-rendered root route with active rooms showcase injected directly in initial HTML
+app.get('/', (req, res) => {
+  const indexPath = path.join(__dirname, 'public', 'index.html');
+  fs.readFile(indexPath, 'utf8', (err, html) => {
+    if (err) {
+      return res.status(500).send('Error loading SyncBeat interface');
     }
-    fs.writeFileSync(ROOMS_FILE, JSON.stringify(list, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('saveRoomsToDisk error:', err);
-  }
-}
-
-function seedDefaultRooms() {
-  const defaults = [
-    {
-      name: 'Lofi Lounge',
-      key: 'lofi-lounge',
-      videoId: 'jfKfPfyJRdk',
-      title: 'lofi hip hop radio 📚 beats to relax/study to',
-      author: 'Lofi Girl',
-      thumbnail: 'https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg',
-    },
-    {
-      name: 'Synthwave Radio',
-      key: 'synthwave-radio',
-      videoId: '4xDzrJKXOOY',
-      title: 'Synthwave Radio - Chill Synth / Retro Beats',
-      author: 'Lofi Records',
-      thumbnail: 'https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg',
-    },
-    {
-      name: 'Cafe Jazz',
-      key: 'cafe-jazz',
-      videoId: 'Dx5qFachd3A',
-      title: 'Coffee Shop Radio - Relaxing Jazz & Bossa Nova',
-      author: 'Cafe Music BGM channel',
-      thumbnail: 'https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg',
-    },
-    {
-      name: 'dene',
-      key: 'dene',
-      videoId: 'Dx5qFachd3A',
-      title: 'Relax music Slow music',
-      author: 'YouTube Artist',
-      thumbnail: 'https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg',
-    },
-  ];
-
-  for (const def of defaults) {
-    const norm = def.key.toLowerCase().trim();
-    if (!rooms.has(norm)) {
-      rooms.set(norm, {
-        name: def.name,
-        password: '',
-        adminSocketId: null,
-        currentVideoId: def.videoId,
-        currentTitle: def.title,
-        currentAuthor: def.author,
-        currentThumbnail: def.thumbnail,
-        startedAt: Date.now(),
-        isPlaying: true,
-        pausedAt: 0,
-        duration: 3600,
-        playlist: [
-          {
-            id: 'preset_1',
-            videoId: '4xDzrJKXOOY',
-            title: 'Synthwave Radio - Chill Synth / Retro Beats',
-            author: 'Lofi Records',
-            thumbnailUrl: 'https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg',
-            addedBy: 'System',
-            addedAt: Date.now(),
-          },
-        ],
-        users: new Map(),
-        lastTrackChangeTime: 0,
-        createdAt: Date.now(),
-      });
-    }
-  }
-}
-
-function loadRoomsFromDisk() {
-  try {
-    if (fs.existsSync(ROOMS_FILE)) {
-      const content = fs.readFileSync(ROOMS_FILE, 'utf-8');
-      const list = JSON.parse(content);
-      if (Array.isArray(list)) {
-        for (const item of list) {
-          if (!item.name) continue;
-          const key = (item.normalizedName || item.name).toLowerCase().trim();
-          rooms.set(key, {
-            name: item.name,
-            password: '',
-            adminSocketId: null,
-            currentVideoId: item.currentVideoId || 'jfKfPfyJRdk',
-            currentTitle: item.currentTitle || 'Relaxing Beats',
-            currentAuthor: item.currentAuthor || 'YouTube Stream',
-            currentThumbnail: item.currentThumbnail || `https://img.youtube.com/vi/${item.currentVideoId || 'jfKfPfyJRdk'}/hqdefault.jpg`,
-            startedAt: item.startedAt || Date.now(),
-            isPlaying: item.isPlaying !== false,
-            pausedAt: item.pausedAt || 0,
-            duration: item.duration || 3600,
-            playlist: item.playlist || [],
-            users: new Map(),
-            lastTrackChangeTime: 0,
-            createdAt: item.createdAt || Date.now(),
-          });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('loadRoomsFromDisk error:', err);
-  }
-
-  seedDefaultRooms();
-  saveRoomsToDisk();
-}
-
-// Initialize rooms immediately on server boot
-loadRoomsFromDisk();
-
-// Active rooms API endpoint
-app.get('/api/rooms', (req, res) => {
-  res.json({ rooms: getActiveRoomsList() });
+    const publicRooms = roomManager.getPublicRoomsSummary();
+    const renderedCards = renderRoomsHtml(publicRooms);
+    const hydratedHtml = html.replace('<!-- PRE_RENDERED_ROOMS -->', renderedCards);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(hydratedHtml);
+  });
 });
 
-/**
- * Sliding window rate limit store for track change requests.
- * Key: socketId
- * Value: Array of timestamps (number[]) representing requests made within the window
- */
-const trackChangeTimestamps = new Map();
+// Static assets (CSS, JS, images)
+app.use(express.static(path.join(__dirname, 'public')));
 
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60 seconds
-const MAX_REQUESTS_PER_WINDOW = 2; // Max 2 track changes per 60s
-const RACE_CONDITION_LOCKOUT_MS = 500; // 500ms lockout window
+// Public REST API endpoints
+app.get('/api/rooms', (req, res) => {
+  res.json({ success: true, rooms: roomManager.getPublicRoomsSummary() });
+});
 
-/**
- * Helper to extract YouTube video ID from various URL formats or raw ID.
- */
-function extractYouTubeId(input) {
-  if (!input || typeof input !== 'string') return null;
-  const trimmed = input.trim();
-  // 11 characters ID direct match
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
+app.get('/api/rooms/:name', (req, res) => {
+  const room = roomManager.getRoom(req.params.name);
+  if (!room) {
+    return res.status(404).json({ success: false, error: 'Room not found' });
   }
-  // Regex matching standard watch, short links, embeds, shorts, music
-  const regExp = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/;
-  const match = trimmed.match(regExp);
-  return match && match[1] ? match[1] : null;
-}
+  res.json({ success: true, syncState: roomManager.getSyncPayload(room) });
+});
 
-/**
- * Fetch video metadata via YouTube oEmbed (title, author, thumbnail)
- */
-async function fetchYouTubeMetadata(videoId) {
-  const defaultMeta = {
-    title: `YouTube Track (${videoId})`,
-    author: 'YouTube Artist',
-    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-    duration: 210, // Default estimated duration if not known
-  };
-
-  try {
-    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-
-    const res = await fetch(oembedUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        title: data.title || defaultMeta.title,
-        author: data.author_name || defaultMeta.author,
-        thumbnailUrl: data.thumbnail_url || defaultMeta.thumbnailUrl,
-        duration: defaultMeta.duration,
-      };
-    }
-  } catch (err) {
-    // Fail silently to fallback
+app.post('/api/parse-url', async (req, res) => {
+  const { input } = req.body;
+  const videoId = extractVideoId(input);
+  if (!videoId) {
+    return res.status(400).json({ success: false, error: 'Invalid YouTube URL or Video ID' });
   }
+  const metadata = await fetchVideoMetadata(videoId);
+  res.json({ success: true, videoId, ...metadata });
+});
 
-  return defaultMeta;
-}
-
-/**
- * Get current elapsed seconds according to server-authoritative clock.
- */
-function getRoomElapsedSeconds(room) {
-  if (!room.currentVideoId) return 0;
-  if (!room.isPlaying) {
-    return Math.max(0, room.pausedAt || 0);
-  }
-  const elapsed = (Date.now() - room.startedAt) / 1000;
-  return Math.max(0, elapsed);
-}
-
-/**
- * Check and record rate limit for a client socket.
- * Returns: { allowed: boolean, remainingSeconds?: number, remainingRequests: number }
- */
-function checkRateLimit(socketId, isAdmin = false) {
-  // Admins can be exempted or have higher limits; per prompt:
-  // "Restrict each client to maximum 2 track change requests per 60 seconds."
-  if (isAdmin) {
-    return { allowed: true, remainingRequests: MAX_REQUESTS_PER_WINDOW };
-  }
-
-  const now = Date.now();
-  const history = (trackChangeTimestamps.get(socketId) || []).filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS
-  );
-
-  if (history.length >= MAX_REQUESTS_PER_WINDOW) {
-    const oldestTimestamp = history[0];
-    const cooldownRemainingMs = oldestTimestamp + RATE_LIMIT_WINDOW_MS - now;
-    const remainingSeconds = Math.max(1, Math.ceil(cooldownRemainingMs / 1000));
-    return {
-      allowed: false,
-      remainingSeconds,
-      remainingRequests: 0,
-    };
-  }
-
-  // Record this attempt
-  history.push(now);
-  trackChangeTimestamps.set(socketId, history);
-
-  return {
-    allowed: true,
-    remainingRequests: MAX_REQUESTS_PER_WINDOW - history.length,
-  };
-}
-
-/**
- * Compile public serializable room state for broadcasting.
- */
-function formatRoomState(room) {
-  const elapsedSeconds = getRoomElapsedSeconds(room);
-  const usersList = Array.from(room.users.values()).map((u) => ({
-    socketId: u.socketId,
-    nickname: u.nickname,
-    role: u.role,
-  }));
-
-  return {
-    roomName: room.name,
-    currentVideoId: room.currentVideoId,
-    currentTitle: room.currentTitle,
-    currentAuthor: room.currentAuthor,
-    currentThumbnail: room.currentThumbnail,
-    startedAt: room.startedAt,
-    isPlaying: room.isPlaying,
-    elapsedSeconds: parseFloat(elapsedSeconds.toFixed(2)),
-    duration: room.duration,
-    playlist: room.playlist,
-    listenersCount: room.users.size,
-    users: usersList,
-    serverTime: Date.now(),
-  };
-}
-
-function broadcastActiveRooms() {
-  io.emit('active_rooms_list', getActiveRoomsList());
-}
-
-// ==========================================
-// 10-SECOND SERVER HEARTBEAT ENGINE
-// ==========================================
-setInterval(() => {
-  const now = Date.now();
-  for (const [roomName, room] of rooms.entries()) {
-    if (room.users.size === 0) continue;
-
-    const elapsedSeconds = getRoomElapsedSeconds(room);
-
-    // Broadcast heartbeat to room subscribers
-    io.to(`room_${roomName}`).emit('sync_heartbeat', {
-      currentVideoId: room.currentVideoId,
-      isPlaying: room.isPlaying,
-      elapsedSeconds: parseFloat(elapsedSeconds.toFixed(2)),
-      serverTime: now,
-    });
-  }
-}, 10000);
-
-// ==========================================
-// SOCKET.IO EVENT HANDLERS
-// ==========================================
+// Socket.io Real-Time Synchronization Engine
 io.on('connection', (socket) => {
-  // Immediately send real-time active rooms list to connected client
-  socket.emit('active_rooms_list', getActiveRoomsList());
-  // 1. CREATE ROOM (Admin)
-  socket.on('create_room', async ({ roomName, nickname, forceRecreate = false }) => {
-    if (!roomName || !roomName.trim()) {
-      return socket.emit('error_notification', {
-        message: 'Room name is required.',
+  const clientIp = socket.handshake.address || socket.id;
+  const clientKey = `${clientIp}:${socket.id}`;
+  let currentRoom = null;
+  let currentListener = null;
+
+  // Rate Limiting Guard Helper
+  function enforceRateLimit(actionName) {
+    const check = actionRateLimiter.consume(clientKey);
+    if (!check.allowed) {
+      socket.emit('rate:limit_error', {
+        action: actionName,
+        message: 'Anti-Abuse: Action rate limit exceeded (maximum 2 actions per 15 seconds).',
+        cooldownRemainingSec: check.cooldownRemainingSec
       });
+      return false;
+    }
+    return true;
+  }
+
+  // 1. Join Room
+  socket.on('join:room', ({ roomName, nickname }) => {
+    if (!roomName) return;
+
+    // Leave any previous room
+    if (currentRoom) {
+      handleLeave();
     }
 
-    const normalizedRoom = roomName.trim().toLowerCase();
-    console.log(`[CREATE ROOM] "${roomName}" (normalized: "${normalizedRoom}"). Current rooms:`, Array.from(rooms.keys()));
-    if (rooms.has(normalizedRoom)) {
-      const existingRoom = rooms.get(normalizedRoom);
-      const isRoomEmpty = existingRoom.users.size === 0;
+    const { room, listener } = roomManager.joinRoom(roomName, socket.id, nickname);
+    currentRoom = room;
+    currentListener = listener;
 
-      // If previous room has no listeners, or force recreate: reset
-      if (isRoomEmpty || forceRecreate) {
-        io.to(`room_${normalizedRoom}`).emit('room_activity', {
-          type: 'system',
-          text: `Previous room was reset and recreated by Host.`,
-          timestamp: Date.now(),
-        });
-        rooms.delete(normalizedRoom);
-      } else {
-        // If room is already active with listeners, join it directly!
-        console.log(`[CREATE ROOM] "${roomName}" already active. Rejoining directly.`);
-      }
-    }
+    const socketRoomId = `room:${room.normalizedName}`;
+    socket.join(socketRoomId);
 
-    const adminNickname = (nickname && nickname.trim()) || 'Admin Host';
+    // Provide authoritative state to the newly joined client
+    const syncState = roomManager.getSyncPayload(room);
+    socket.emit('room:joined', {
+      syncState,
+      you: listener,
+      cooldownRemainingSec: actionRateLimiter.getCooldown(clientKey)
+    });
 
-    // If room already exists, join existing room instead of wiping ongoing song
-    if (rooms.has(normalizedRoom)) {
-      const room = rooms.get(normalizedRoom);
-      const userObj = {
-        socketId: socket.id,
-        nickname: adminNickname,
-        role: 'admin',
-        joinedAt: Date.now(),
-      };
-      room.users.set(socket.id, userObj);
-      socketToUser.set(socket.id, {
-        roomName: normalizedRoom,
-        nickname: adminNickname,
-        role: 'admin',
-        socketId: socket.id,
-      });
-      socket.join(`room_${normalizedRoom}`);
-      socket.emit('room_joined', {
-        ...formatRoomState(room),
-        role: 'admin',
-        message: `Joined active room "${room.name}" as Admin!`,
-      });
-      broadcastActiveRooms();
+    // Notify all listeners in the room
+    io.to(socketRoomId).emit('listeners:update', {
+      listeners: Array.from(room.listeners.values())
+    });
+
+    // Broadcast system activity feed message
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `${listener.nickname} joined the room as ${listener.role === 'admin' ? '👑 Admin' : 'Listener'}.`,
+      timestamp: Date.now()
+    });
+
+    // Broadcast public rooms update to lobby
+    io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
+  });
+
+  // 2. Client resync request
+  socket.on('sync:request', () => {
+    if (!currentRoom) return;
+    socket.emit('room:sync', roomManager.getSyncPayload(currentRoom));
+  });
+
+  // 3. Playback Toggle (Play / Pause)
+  socket.on('playback:toggle', ({ isPlaying }) => {
+    if (!currentRoom) return;
+
+    // Rate limiting: max 2 actions per 15-second window
+    if (!enforceRateLimit('playback:toggle')) return;
+
+    // Role check: Only admin can toggle playback
+    if (currentListener && currentListener.role !== 'admin') {
+      socket.emit('action:error', { message: 'Only the room Admin can toggle playback.' });
       return;
     }
 
-    // Default initial track (Lofi Beats) to get started immediately
-    const initialVideoId = 'jfKfPfyJRdk';
-    const initialMeta = await fetchYouTubeMetadata(initialVideoId);
+    let payload;
+    if (isPlaying) {
+      payload = roomManager.play(currentRoom);
+    } else {
+      payload = roomManager.pause(currentRoom);
+    }
 
-    const newRoom = {
-      name: roomName.trim(),
-      password: '',
-      adminSocketId: socket.id,
-      currentVideoId: initialVideoId,
-      currentTitle: initialMeta.title,
-      currentAuthor: initialMeta.author,
-      currentThumbnail: initialMeta.thumbnailUrl,
-      startedAt: Date.now(),
-      isPlaying: true,
-      pausedAt: 0,
-      duration: 3600, // livestream/long-form track
-      playlist: [
-        {
-          id: 'preset_1',
-          videoId: '4xDzrJKXOOY',
-          title: 'Synthwave Radio - Chill Synth / Retro Beats',
-          author: 'Lofi Records',
-          thumbnailUrl: 'https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg',
-          addedBy: 'System',
-          addedAt: Date.now(),
-        },
-        {
-          id: 'preset_2',
-          videoId: 'Dx5qFachd3A',
-          title: 'Coffee Shop Radio - Relaxing Jazz & Bossa Nova',
-          author: 'Cafe Music',
-          thumbnailUrl: 'https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg',
-          addedBy: 'System',
-          addedAt: Date.now(),
-        },
-      ],
-      users: new Map(),
-      lastTrackChangeTime: 0,
-      createdAt: Date.now(),
-    };
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('room:sync', payload);
 
-    const userObj = {
-      socketId: socket.id,
-      nickname: adminNickname,
-      role: 'admin',
-      joinedAt: Date.now(),
-    };
-
-    newRoom.users.set(socket.id, userObj);
-    rooms.set(normalizedRoom, newRoom);
-    socketToUser.set(socket.id, {
-      roomName: normalizedRoom,
-      nickname: adminNickname,
-      role: 'admin',
-      socketId: socket.id,
-    });
-
-    socket.join(`room_${normalizedRoom}`);
-
-    // Notify creator
-    socket.emit('room_joined', {
-      ...formatRoomState(newRoom),
-      role: 'admin',
-      message: `Room "${roomName}" created successfully! You are the Admin.`,
-    });
-
-    // Notify room feed
-    io.to(`room_${normalizedRoom}`).emit('room_activity', {
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       type: 'system',
-      text: `${adminNickname} (Admin) created the room.`,
-      timestamp: Date.now(),
+      text: `${currentListener.nickname} ${isPlaying ? 'resumed' : 'paused'} playback.`,
+      timestamp: Date.now()
     });
 
-    saveRoomsToDisk();
-    // Broadcast updated room list to all lobbies
-    broadcastActiveRooms();
+    io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
   });
 
-  // 2. JOIN ROOM (Client / Guest) - No password required, anyone with room name or link can enter!
-  socket.on('join_room', async ({ roomName, nickname }) => {
-    if (!roomName || !roomName.trim()) {
-      return socket.emit('error_notification', {
-        message: 'Room name is required.',
-      });
+  // 4. Playback Seek
+  socket.on('playback:seek', ({ targetSec }) => {
+    if (!currentRoom) return;
+
+    if (!enforceRateLimit('playback:seek')) return;
+
+    if (currentListener && currentListener.role !== 'admin') {
+      socket.emit('action:error', { message: 'Only the room Admin can seek playback position.' });
+      return;
     }
 
-    const trimmed = roomName.trim();
-    const normalizedRoom = trimmed.toLowerCase();
-    const slugRoom = normalizedRoom.replace(/\s+/g, '-');
-    const unslugRoom = normalizedRoom.replace(/-/g, ' ');
+    const payload = roomManager.seek(currentRoom, targetSec);
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('room:sync', payload);
 
-    let room = rooms.get(normalizedRoom) || rooms.get(slugRoom) || rooms.get(unslugRoom);
-
-    if (!room) {
-      for (const [key, r] of rooms.entries()) {
-        const rName = r.name.toLowerCase();
-        if (
-          rName === normalizedRoom ||
-          rName.replace(/\s+/g, '-') === slugRoom ||
-          key === normalizedRoom ||
-          key.replace(/\s+/g, '-') === slugRoom
-        ) {
-          room = r;
-          break;
-        }
-      }
-    }
-
-    // Auto-initialize if room does not exist yet so user never gets an error
-    if (!room) {
-      console.log(`[JOIN ROOM] Auto-creating room "${roomName}" for instant join.`);
-      const initialMeta = await fetchYouTubeMetadata('jfKfPfyJRdk');
-      room = {
-        name: trimmed,
-        password: '',
-        adminSocketId: socket.id,
-        currentVideoId: 'jfKfPfyJRdk',
-        currentTitle: initialMeta.title,
-        currentAuthor: initialMeta.author,
-        currentThumbnail: initialMeta.thumbnailUrl,
-        startedAt: Date.now(),
-        isPlaying: true,
-        pausedAt: 0,
-        duration: 3600,
-        playlist: [],
-        users: new Map(),
-        lastTrackChangeTime: 0,
-        createdAt: Date.now(),
-      };
-      rooms.set(normalizedRoom, room);
-      saveRoomsToDisk();
-      broadcastActiveRooms();
-    }
-
-    const guestNickname =
-      (nickname && nickname.trim()) || `Listener_${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const userObj = {
-      socketId: socket.id,
-      nickname: guestNickname,
-      role: room.users.size === 0 ? 'admin' : 'client',
-      joinedAt: Date.now(),
-    };
-
-    room.users.set(socket.id, userObj);
-    socketToUser.set(socket.id, {
-      roomName: normalizedRoom,
-      nickname: guestNickname,
-      role: userObj.role,
-      socketId: socket.id,
-    });
-
-    socket.join(`room_${normalizedRoom}`);
-
-    // Send full current room state to newly connected client
-    socket.emit('room_joined', {
-      ...formatRoomState(room),
-      role: userObj.role,
-      message: `Joined room "${room.name}". Synchronizing playback...`,
-    });
-
-    // Broadcast user joined to entire room
-    io.to(`room_${normalizedRoom}`).emit('user_joined', {
-      users: Array.from(room.users.values()).map((u) => ({
-        socketId: u.socketId,
-        nickname: u.nickname,
-        role: u.role,
-      })),
-      listenersCount: room.users.size,
-      newUser: guestNickname,
-    });
-
-    broadcastActiveRooms();
-
-    io.to(`room_${normalizedRoom}`).emit('room_activity', {
-      type: 'user',
-      text: `${guestNickname} joined the room.`,
-      timestamp: Date.now(),
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `${currentListener.nickname} scrubbed to ${formatTime(targetSec)}.`,
+      timestamp: Date.now()
     });
   });
 
-  // 3. CHANGE / SKIP TRACK (First-Come, First-Served with Rate Limiting & Lockout)
-  socket.on('change_track', async ({ youtubeInput, isSkip = false }) => {
-    const user = socketToUser.get(socket.id);
-    if (!user) {
-      return socket.emit('error_notification', { message: 'You are not in a room.' });
+  // 5. Play Track Now (Immediate Switch)
+  socket.on('track:play_now', async ({ input }) => {
+    if (!currentRoom) return;
+
+    if (!enforceRateLimit('track:play_now')) return;
+
+    if (currentListener && currentListener.role !== 'admin') {
+      socket.emit('action:error', { message: 'Only the room Admin can immediately change tracks.' });
+      return;
     }
 
-    const room = rooms.get(user.roomName);
-    if (!room) {
-      return socket.emit('error_notification', { message: 'Room not found.' });
-    }
-
-    const isAdmin = user.role === 'admin';
-
-    // Anti-Abuse Rate Limiter check (Max 2 requests per 60s per client)
-    const rateCheck = checkRateLimit(socket.id, isAdmin);
-    if (!rateCheck.allowed) {
-      return socket.emit('rate_limit_error', {
-        message: `Rate limit exceeded: Maximum 2 track changes per 60 seconds.`,
-        remainingSeconds: rateCheck.remainingSeconds,
-      });
-    }
-
-    // Race condition resolution: 500ms lockout window
-    const now = Date.now();
-    if (now - room.lastTrackChangeTime < RACE_CONDITION_LOCKOUT_MS) {
-      return socket.emit('error_notification', {
-        message: 'Another track change was just processed. Please wait a moment.',
-      });
-    }
-
-    // Lock the room track change state
-    room.lastTrackChangeTime = now;
-
-    let targetVideoId = null;
-    let targetMeta = null;
-
-    if (isSkip) {
-      // Check if there are tracks in queue
-      if (room.playlist && room.playlist.length > 0) {
-        const nextItem = room.playlist.shift();
-        targetVideoId = nextItem.videoId;
-        targetMeta = {
-          title: nextItem.title,
-          author: nextItem.author || 'YouTube Artist',
-          thumbnailUrl: nextItem.thumbnailUrl,
-          duration: nextItem.duration || 210,
-        };
-      } else {
-        // No tracks in queue to skip to
-        return socket.emit('error_notification', {
-          message: 'The queue is empty. Paste a YouTube URL or pick a track to play!',
-        });
-      }
-    } else {
-      targetVideoId = extractYouTubeId(youtubeInput);
-      if (!targetVideoId) {
-        return socket.emit('error_notification', {
-          message: 'Invalid YouTube link or ID. Please paste a valid YouTube video URL or ID.',
-        });
-      }
-      targetMeta = await fetchYouTubeMetadata(targetVideoId);
-    }
-
-    // Update authoritative room state
-    room.currentVideoId = targetVideoId;
-    room.currentTitle = targetMeta.title;
-    room.currentAuthor = targetMeta.author;
-    room.currentThumbnail = targetMeta.thumbnailUrl;
-    room.startedAt = Date.now();
-    room.isPlaying = true;
-    room.pausedAt = 0;
-    room.duration = targetMeta.duration || 210;
-
-    // Broadcast room_track_updated to all participants simultaneously
-    io.to(`room_${user.roomName}`).emit('room_track_updated', {
-      currentVideoId: room.currentVideoId,
-      currentTitle: room.currentTitle,
-      currentAuthor: room.currentAuthor,
-      currentThumbnail: room.currentThumbnail,
-      startedAt: room.startedAt,
-      isPlaying: room.isPlaying,
-      elapsedSeconds: 0,
-      duration: room.duration,
-      playlist: room.playlist,
-      changedBy: user.nickname,
-      serverTime: Date.now(),
-    });
-
-    io.to(`room_${user.roomName}`).emit('room_activity', {
-      type: 'track',
-      text: `${user.nickname} changed track to: "${room.currentTitle}"`,
-      timestamp: Date.now(),
-    });
-  });
-
-  // 4. ADD TO QUEUE (Playlist management)
-  socket.on('add_to_queue', async ({ youtubeInput }) => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-    const room = rooms.get(user.roomName);
-    if (!room) return;
-
-    const videoId = extractYouTubeId(youtubeInput);
+    const videoId = extractVideoId(input);
     if (!videoId) {
-      return socket.emit('error_notification', {
-        message: 'Invalid YouTube link or ID.',
-      });
+      socket.emit('action:error', { message: 'Invalid YouTube URL or Video ID.' });
+      return;
     }
 
-    const meta = await fetchYouTubeMetadata(videoId);
-    const queueItem = {
-      id: `queue_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    const metadata = await fetchVideoMetadata(videoId);
+    const payload = roomManager.setTrack(currentRoom, {
       videoId,
-      title: meta.title,
-      author: meta.author,
-      thumbnailUrl: meta.thumbnailUrl,
-      duration: meta.duration || 210,
-      addedBy: user.nickname,
-      addedAt: Date.now(),
-    };
+      title: metadata.title,
+      author: metadata.author,
+      thumbnailUrl: metadata.thumbnailUrl,
+      duration: 0
+    });
 
-    // If room has no active track playing, start immediately
-    if (!room.currentVideoId) {
-      room.currentVideoId = queueItem.videoId;
-      room.currentTitle = queueItem.title;
-      room.currentAuthor = queueItem.author;
-      room.currentThumbnail = queueItem.thumbnailUrl;
-      room.startedAt = Date.now();
-      room.isPlaying = true;
-      room.pausedAt = 0;
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('room:sync', payload);
 
-      io.to(`room_${user.roomName}`).emit('room_track_updated', {
-        currentVideoId: room.currentVideoId,
-        currentTitle: room.currentTitle,
-        currentAuthor: room.currentAuthor,
-        currentThumbnail: room.currentThumbnail,
-        startedAt: room.startedAt,
-        isPlaying: room.isPlaying,
-        elapsedSeconds: 0,
-        duration: room.duration,
-        playlist: room.playlist,
-        changedBy: user.nickname,
-        serverTime: Date.now(),
-      });
-    } else {
-      room.playlist.push(queueItem);
-      io.to(`room_${user.roomName}`).emit('playlist_updated', {
-        playlist: room.playlist,
-      });
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `🎵 Now Playing: "${metadata.title}" (started by ${currentListener.nickname}).`,
+      timestamp: Date.now()
+    });
+
+    io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
+  });
+
+  // 6. Skip / Next Track
+  socket.on('playback:skip', () => {
+    if (!currentRoom) return;
+
+    if (!enforceRateLimit('playback:skip')) return;
+
+    if (currentListener && currentListener.role !== 'admin') {
+      socket.emit('action:error', { message: 'Only the room Admin can skip tracks.' });
+      return;
     }
 
-    io.to(`room_${user.roomName}`).emit('room_activity', {
-      type: 'queue',
-      text: `${user.nickname} added "${queueItem.title}" to the queue.`,
-      timestamp: Date.now(),
+    const payload = roomManager.skipTrack(currentRoom);
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+
+    io.to(socketRoomId).emit('room:sync', payload);
+    io.to(socketRoomId).emit('queue:update', { queue: currentRoom.queue });
+
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `⏭ ${currentListener.nickname} skipped to: "${currentRoom.currentTitle}".`,
+      timestamp: Date.now()
     });
+
+    io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
   });
 
-  // 5. PLAYBACK CONTROLS (Play / Pause / Seek)
-  socket.on('toggle_playback', () => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-    const room = rooms.get(user.roomName);
-    if (!room || !room.currentVideoId) return;
+  // 7. Add Track to Queue (Any Listener can add to queue)
+  socket.on('track:add_queue', async ({ input }) => {
+    if (!currentRoom) return;
 
-    // Both Admin and Clients can toggle, or Admin override
-    if (room.isPlaying) {
-      // Pause
-      room.pausedAt = getRoomElapsedSeconds(room);
-      room.isPlaying = false;
-    } else {
-      // Resume
-      room.startedAt = Date.now() - (room.pausedAt || 0) * 1000;
-      room.isPlaying = true;
+    const videoId = extractVideoId(input);
+    if (!videoId) {
+      socket.emit('action:error', { message: 'Invalid YouTube URL or Video ID.' });
+      return;
     }
 
-    const elapsed = getRoomElapsedSeconds(room);
-    io.to(`room_${user.roomName}`).emit('playback_state_changed', {
-      isPlaying: room.isPlaying,
-      elapsedSeconds: parseFloat(elapsed.toFixed(2)),
-      serverTime: Date.now(),
-      updatedBy: user.nickname,
+    const metadata = await fetchVideoMetadata(videoId);
+    const addedTrack = roomManager.addToQueue(currentRoom, {
+      videoId,
+      title: metadata.title,
+      author: metadata.author,
+      thumbnailUrl: metadata.thumbnailUrl,
+      duration: 0,
+      addedBy: currentListener ? currentListener.nickname : 'Anonymous'
     });
 
-    io.to(`room_${user.roomName}`).emit('room_activity', {
-      type: 'control',
-      text: `${user.nickname} ${room.isPlaying ? 'resumed' : 'paused'} playback.`,
-      timestamp: Date.now(),
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('queue:update', { queue: currentRoom.queue });
+
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `➕ ${addedTrack.addedBy} added "${addedTrack.title}" to Up Next queue.`,
+      timestamp: Date.now()
     });
   });
 
-  socket.on('seek_to', ({ targetSeconds }) => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-    const room = rooms.get(user.roomName);
-    if (!room || !room.currentVideoId) return;
+  // 8. Remove Track from Queue
+  socket.on('queue:remove', ({ trackId }) => {
+    if (!currentRoom) return;
 
-    const clampedSec = Math.max(0, parseFloat(targetSeconds) || 0);
-    room.pausedAt = clampedSec;
-    if (room.isPlaying) {
-      room.startedAt = Date.now() - clampedSec * 1000;
+    const track = currentRoom.queue.find(t => t.id === trackId);
+    if (!track) return;
+
+    // Allow if admin OR if this user added the track
+    const isAdmin = currentListener && currentListener.role === 'admin';
+    const isOwner = currentListener && currentListener.nickname === track.addedBy;
+
+    if (!isAdmin && !isOwner) {
+      socket.emit('action:error', { message: 'You can only remove tracks you added, or ask an Admin.' });
+      return;
     }
 
-    io.to(`room_${user.roomName}`).emit('seek_updated', {
-      elapsedSeconds: clampedSec,
-      serverTime: Date.now(),
-      seekBy: user.nickname,
+    roomManager.removeFromQueue(currentRoom, trackId);
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('queue:update', { queue: currentRoom.queue });
+
+    io.to(socketRoomId).emit('activity:feed', {
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: 'system',
+      text: `🗑 "${track.title}" was removed from the queue.`,
+      timestamp: Date.now()
     });
   });
 
-  // 6. REMOVE QUEUE ITEM (Admin or owner)
-  socket.on('remove_queue_item', ({ itemId }) => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-    const room = rooms.get(user.roomName);
-    if (!room) return;
+  // 9. Duration update from client player
+  socket.on('player:duration', ({ duration }) => {
+    if (!currentRoom) return;
+    roomManager.updateDuration(currentRoom, duration);
+  });
 
-    room.playlist = room.playlist.filter((item) => item.id !== itemId);
-    io.to(`room_${user.roomName}`).emit('playlist_updated', {
-      playlist: room.playlist,
+  // 10. Real-Time Chat Message
+  socket.on('chat:send', ({ text }) => {
+    if (!currentRoom || !text || typeof text !== 'string') return;
+    const clean = text.trim();
+    if (!clean) return;
+
+    const socketRoomId = `room:${currentRoom.normalizedName}`;
+    io.to(socketRoomId).emit('chat:message', {
+      id: `chat-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      sender: currentListener ? currentListener.nickname : 'Anonymous',
+      senderId: socket.id,
+      role: currentListener ? currentListener.role : 'client',
+      text: clean,
+      timestamp: Date.now()
     });
   });
 
-  // 7. REQUEST INSTANT RESYNC
-  socket.on('request_resync', () => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-    const room = rooms.get(user.roomName);
-    if (!room) return;
+  // Disconnection handler
+  function handleLeave() {
+    if (!currentRoom) return;
+    const result = roomManager.leaveRoom(socket.id);
+    if (result) {
+      const { room, leavingListener, newAdmin } = result;
+      const socketRoomId = `room:${room.normalizedName}`;
 
-    const elapsed = getRoomElapsedSeconds(room);
-    socket.emit('sync_heartbeat', {
-      currentVideoId: room.currentVideoId,
-      isPlaying: room.isPlaying,
-      elapsedSeconds: parseFloat(elapsed.toFixed(2)),
-      serverTime: Date.now(),
-      isManualResync: true,
-    });
-  });
-
-  // 8. SEND CHAT / REACTION MESSAGE
-  socket.on('send_chat', ({ message }) => {
-    const user = socketToUser.get(socket.id);
-    if (!user || !message || !message.trim()) return;
-
-    io.to(`room_${user.roomName}`).emit('chat_message', {
-      sender: user.nickname,
-      role: user.role,
-      text: message.trim().slice(0, 200),
-      timestamp: Date.now(),
-    });
-  });
-
-  // 9. DELETE ROOM (Admin explicit deletion)
-  socket.on('delete_room', () => {
-    const user = socketToUser.get(socket.id);
-    if (!user || user.role !== 'admin') {
-      return socket.emit('error_notification', {
-        message: 'Only the room Admin can delete this room.',
-      });
-    }
-
-    const room = rooms.get(user.roomName);
-    if (room) {
-      io.to(`room_${user.roomName}`).emit('room_deleted', {
-        message: `Room "${room.name}" was closed and deleted by the Admin.`,
-      });
-      rooms.delete(user.roomName);
-      saveRoomsToDisk();
-      broadcastActiveRooms();
-    }
-  });
-
-  // 10. DISCONNECT HANDLING
-  socket.on('disconnect', () => {
-    const user = socketToUser.get(socket.id);
-    if (!user) return;
-
-    const room = rooms.get(user.roomName);
-    if (room) {
-      room.users.delete(socket.id);
-
-      // If admin left and others remain, designate next user as admin
-      if (room.adminSocketId === socket.id && room.users.size > 0) {
-        const nextAdmin = room.users.values().next().value;
-        if (nextAdmin) {
-          nextAdmin.role = 'admin';
-          room.adminSocketId = nextAdmin.socketId;
-          const targetSocket = io.sockets.sockets.get(nextAdmin.socketId);
-          if (targetSocket) {
-            targetSocket.emit('role_changed', { role: 'admin' });
-          }
-        }
-      }
-
-      // Broadcast user left
-      io.to(`room_${user.roomName}`).emit('user_left', {
-        users: Array.from(room.users.values()).map((u) => ({
-          socketId: u.socketId,
-          nickname: u.nickname,
-          role: u.role,
-        })),
-        listenersCount: room.users.size,
-        leftUser: user.nickname,
+      io.to(socketRoomId).emit('listeners:update', {
+        listeners: Array.from(room.listeners.values())
       });
 
-      broadcastActiveRooms();
-
-      io.to(`room_${user.roomName}`).emit('room_activity', {
+      io.to(socketRoomId).emit('activity:feed', {
+        id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
         type: 'system',
-        text: `${user.nickname} disconnected.`,
-        timestamp: Date.now(),
+        text: `${leavingListener.nickname} left the room.`,
+        timestamp: Date.now()
       });
 
-      // Keep empty rooms in memory for 24 hours so hosts can reconnect or refresh without losing their room
-      if (room.users.size === 0) {
-        setTimeout(() => {
-          const checkRoom = rooms.get(user.roomName);
-          if (checkRoom && checkRoom.users.size === 0) {
-            rooms.delete(user.roomName);
-          }
-        }, 24 * 60 * 60 * 1000);
+      if (newAdmin) {
+        io.to(socketRoomId).emit('activity:feed', {
+          id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          type: 'system',
+          text: `👑 ${newAdmin.nickname} is now the Room Admin.`,
+          timestamp: Date.now()
+        });
+        io.to(newAdmin.id).emit('role:promoted', { role: 'admin' });
       }
-    }
 
-    socketToUser.delete(socket.id);
-    trackChangeTimestamps.delete(socket.id);
+      io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
+    }
+    currentRoom = null;
+    currentListener = null;
+  }
+
+  socket.on('disconnect', () => {
+    handleLeave();
   });
 });
 
-// SPA fallback route
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/socket.io') || req.path.includes('.')) {
-    return next();
-  }
-  const fallbackIndex = fs.existsSync(path.join(distDir, 'index.html'))
-    ? path.join(distDir, 'index.html')
-    : path.join(publicDir, 'index.html');
-  res.sendFile(fallbackIndex);
-});
+function formatTime(sec) {
+  const s = Math.floor(sec || 0);
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${rem.toString().padStart(2, '0')}`;
+}
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`SyncBeat server running at http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`\n======================================================`);
+  console.log(`🚀 SyncBeat Production Server running on port ${PORT}`);
+  console.log(`📡 Local URL: http://localhost:${PORT}`);
+  console.log(`🎵 Authoritative Room Sync Engine & Anti-Abuse Active`);
+  console.log(`======================================================\n`);
 });

@@ -1,83 +1,82 @@
-# SyncBeat - Real-Time Synchronized Music Room
+# SyncBeat
 
-SyncBeat is a full-stack real-time synchronized music room web application powered by **Node.js (Express + Socket.io)** for the backend and **vanilla HTML5, CSS3, and JavaScript** on the frontend, integrating the **YouTube IFrame Player API**.
-
----
-
-## Quick Start & Setup Instructions
-
-### 1. Installation
-Install project dependencies:
-```bash
-npm install
-```
-
-### 2. Run the Development Server
-Start the Express + Socket.io server with hot TypeScript/JavaScript execution:
-```bash
-npm run dev
-```
-The server will boot on port `3000`:
-```
-SyncBeat server running at http://localhost:3000
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### 3. Production Deployment
-Run the production Node.js server:
-```bash
-npm run build
-npm start
-```
+**SyncBeat** – A full‑stack, real‑time synchronized music room web application built with **Node.js**, **Express**, **Socket.io**, and the **YouTube IFrame Player API**.
 
 ---
 
-## Architecture & Core Features
-
-### 1. User Roles & Authentication
-- **Admin Host**:
-  - Creates a room by choosing a custom Room Name and Room Password.
-  - Controls initial playback and holds administrative override permissions (scrub/seek playback for all clients, skip tracks, remove items, clear queue).
-- **Guest Client**:
-  - Joins an existing room by entering the Room Name and matching Room Password.
-- **Browser Audio Unlock**:
-  - Tapping "Join Room" or "Create Room" executes a user gesture that primes and unlocks programmatic audio playback in mobile browsers (iOS Safari, Android Chrome).
-  - An inline banner also provides a one-tap unmute option if autoplay policies restrict playback.
-
-### 2. Synchronization Engine (Server-Authoritative)
-- The server does not stream raw video/audio bytes; it manages authoritative room playback state and broadcast timing:
-  - `currentVideoId`: 11-character YouTube video ID
-  - `startedAt`: Epoch timestamp (ms) when playback began
-  - `isPlaying`: Playback state flag
-  - `playlist`: Array of queued tracks
-- Elapsed playback time is calculated with:
-  $$\text{elapsedSeconds} = \frac{\text{Date.now()} - \text{startedAt}}{1000}$$
-- **10-Second Server Heartbeat**:
-  - The server emits `sync_heartbeat` every 10 seconds to all connected room sockets.
-  - Clients compare their local player timestamp with `elapsedSeconds`. If drift exceeds $\pm 1.0\text{s}$, `player.seekTo(elapsedSeconds, true)` automatically realigns them.
-
-### 3. Track Change Logic & Race Condition Resolution
-- Track changes are handled **first-come, first-served** based on server arrival time (`Date.now()`).
-- A **500 ms lockout window** rejects conflicting concurrent requests with a descriptive notification.
-- Updates are broadcast immediately to all participants via `room_track_updated`.
-
-### 4. Anti-Abuse & Sliding-Window Rate Limiter
-- Every client socket is tracked using a sliding-window rate limiter:
-  - **Limit**: Maximum 2 track change requests per 60 seconds per socket.
-  - If a client exceeds this threshold, the request is blocked and an error notification is emitted with the exact remaining cooldown seconds.
-  - The client UI displays an active countdown timer on the rate-limit pill.
+## Quick Start (Local Development)
+```bash
+npm install      # install dependencies
+npm start        # start the server (listens on PORT env or 3000)
+```
+Open `http://localhost:3000` in a browser.
 
 ---
 
-## File Structure
+## Deploying to a Public URL
+The application is ready to be deployed on any platform that can run a **Node.js** server and supports **WebSockets** (required for Socket.io). Below are three popular, free‑tier options.
 
+### 1️⃣ Deploy with **Render** (Docker)
+1. **Push the code to a GitHub repository** (or any Git provider). 
+2. Sign‑up at https://render.com and click **New → Web Service**.
+3. Connect your repository and select the **Docker** environment.
+4. Render automatically detects the `Dockerfile` you now have in the project root.
+5. Set the **Build Command** to `docker build -t syncbeat .` (Render sets this for you) and the **Start Command** to `docker run -p $PORT:3000 syncbeat` – the platform injects the `$PORT` variable.
+6. Click **Create Web Service**. Render will build the image, launch the container and give you a public `https://<service>.onrender.com` URL.
+7. **HTTPS** is provided automatically, and the YouTube IFrame Player API works out‑of‑the‑box.
+
+### 2️⃣ Deploy with **Railway** (Docker or Node)
+1. Fork/push the repository to GitHub.
+2. Go to https://railway.app and create a new **Project** → **Deploy from GitHub**.
+3. Choose the repo and select **Dockerfile** as the deployment method. Railway will read the `Dockerfile` and build the image.
+4. Ensure the **Port** variable is set to `3000` (Railway auto‑assigns a `$PORT` env var; the Dockerfile `EXPOSE 3000` is sufficient).
+5. Deploy – Railway provides a public URL like `https://syncbeat.up.railway.app` with TLS.
+
+### 3️⃣ Deploy with **Fly.io** (Docker)
+```bash
+# Install Fly CLI
+curl -L https://fly.io/install.sh | sh
+fly auth login
+fly launch   # in the project directory (it will detect Dockerfile)
 ```
-├── server.js              # Express + Socket.io server, rate limiter, sync math
-├── server.ts              # Full-stack server entry point (runs with tsx)
-├── public/
-│   ├── index.html         # Main dashboard & lobby interface
-│   ├── style.css          # Responsive cyber-lounge theme
-│   └── app.js             # YouTube IFrame API integration & socket listeners
-├── package.json           # Dependencies and run scripts
-└── metadata.json          # Application metadata
+During `fly launch`:
+- Choose a region close to your audience.
+- Accept the auto‑generated `fly.toml`. It already sets `[[services]]` to expose port `80`/`443` and forwards to the container's `PORT`.
+- When the app is launched, Fly gives you a subdomain like `syncbeat.fly.dev` (HTTPS enabled).
+
+---
+
+## Post‑Deployment Checklist
+- **Port**: The server reads `process.env.PORT` (already in `server.js`). No code changes are required.
+- **WebSocket Upgrade**: All platforms above support `wss://` automatically. Ensure you open the site with `https://`; the Socket.io client will use the same origin and upgrade to `wss`.
+- **YouTube IFrame Origin**: The client uses `window.location.origin` for the YouTube player, which works for any domain (including the generated HTTPS URLs).
+- **CORS**: Socket.io is configured with `origin: '*'`. If you prefer tighter security, replace `'*'` with your deployed domain.
+- **Persistence**: Room state is stored in `data/rooms.json`. In containerised environments this file is **ephemeral** – it will be lost on each redeploy. For a production‑grade setup you would mount a persistent volume or switch to a DB. The current implementation works fine for demo / low‑traffic use.
+- **Environment Variables** (optional):
+  - `NODE_ENV=production` (set automatically in the Dockerfile).
+  - `PORT` – injected by the hosting platform.
+
+---
+
+## Frequently Asked Questions
+| Question | Answer |
+|---|---|
+| **Why does the app need a Dockerfile?** | Platforms like Render, Railway, and Fly.io build containers from a Dockerfile, guaranteeing the exact Node version (`node:20-alpine`) and installing only production dependencies. |
+| **Can I deploy without Docker?** | Yes – services like **Vercel** or **Heroku** can run the `npm start` script directly. For Vercel you would need a `vercel.json` that proxies WebSocket traffic, which is more involved. Docker is the simplest cross‑platform route. |
+| **What about HTTPS and autoplay?** | Modern browsers only allow unmuted autoplay after a user gesture. The client code already starts the YouTube player muted and unmutes after the **Audio Unlock** banner click, which works on any HTTPS site. |
+| **How to change the rate‑limiting settings?** | Edit `src/rateLimiter.js` – the constructor receives `maxActions` and `windowMs`. The defaults (2 actions / 15 s) are already in `server.js`. |
+
+---
+
+## TL;DR Deployment Commands (Docker)
+```bash
+# Build the container locally (optional, for testing)
+docker build -t syncbeat .
+# Run exposing the required port (Render/Railway/Fly will do this automatically)
+docker run -p 3000:3000 syncbeat
 ```
+Visit `http://localhost:3000` or the public URL provided by your chosen host.
+
+---
+
+Enjoy your synchronized music rooms! 🎧

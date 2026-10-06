@@ -1,546 +1,367 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>SyncBeat - Real-Time Synchronized Music Room</title>
-  <meta name="description" content="Synchronized music lounge powered by YouTube IFrame API and Node.js Socket.io with server-authoritative playback and sliding-window rate limiting.">
-  <meta property="og:title" content="SyncBeat - Real-Time Synchronized Music Room">
-  <meta property="og:description" content="Listen to YouTube music in perfect real-time sync with friends.">
-  <meta property="og:type" content="website">
+  <title>SyncBeat - Real-Time Synchronized Music Rooms</title>
+  <meta name="description" content="Production-grade real-time synchronized music room web application powered by Node.js, Express, Socket.io, and the YouTube IFrame API.">
 
   <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="/style.css">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f5f3ff',
+              100: '#ede9fe',
+              500: '#8b5cf6',
+              600: '#7c3aed',
+              700: '#6d28d9',
+              900: '#4c1d95',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/css/style.css">
 </head>
-<body class="bg-dark text-slate-100 font-sans antialiased min-h-screen">
+<body class="bg-[#09090b] text-zinc-100 min-h-screen selection:bg-violet-600 selection:text-white flex flex-col">
 
-  <!-- Toast Notification Stack -->
-  <div id="toast-container" class="toast-container" aria-live="polite"></div>
-
-  <!-- Audio Unlock Prompt for Mobile / Autoplay Restricted Browsers -->
-  <div id="audio-unlock-banner" class="audio-banner hidden">
-    <div class="audio-banner-content">
-      <div class="audio-banner-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-        </svg>
-      </div>
-      <div class="audio-banner-text">
-        <strong>Audio playback is primed:</strong> Tap to start synchronized audio stream.
-      </div>
-      <button id="btn-unlock-audio" class="btn-unlock">
-        Enable Audio Now
-      </button>
+  <!-- Mobile & Autoplay Resilience Audio Unlock Prompt Banner -->
+  <div id="audio-unlock-banner" class="hidden fixed top-0 inset-x-0 z-50 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-indigo-600 py-2.5 px-4 text-center cursor-pointer shadow-xl transition-all hover:brightness-110 active:scale-[0.99]">
+    <div class="max-w-4xl mx-auto flex items-center justify-center gap-2.5 text-xs sm:text-sm font-bold text-white drop-shadow">
+      <span class="flex h-2.5 w-2.5 relative">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+      </span>
+      <span>🎧 Audio primed: Tap anywhere or click here to start synchronized audio stream</span>
+      <svg class="w-4 h-4 ml-1 hidden sm:inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
     </div>
   </div>
 
-  <!-- AUTH / LOBBY MODAL SCREEN -->
-  <div id="lobby-screen" class="lobby-wrapper">
-    <div class="lobby-card">
-      <div class="lobby-brand">
-        <div class="logo-mark">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 18V5l12-2v13"></path>
-            <circle cx="6" cy="18" r="3"></circle>
-            <circle cx="18" cy="16" r="3"></circle>
-          </svg>
+  <!-- Header Navigation -->
+  <header class="sticky top-0 z-40 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-xl">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <!-- Logo -->
+      <a href="/" class="flex items-center gap-3 group">
+        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-violet-600 to-fuchsia-600 shadow-lg shadow-violet-600/30 group-hover:scale-105 transition-transform">
+          <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
         </div>
         <div>
-          <h1 class="brand-title">SyncBeat</h1>
-          <p class="brand-tagline">Real-Time Synchronized Music Rooms</p>
-          <div class="server-endpoint-pill">
-            <span class="server-dot"></span>
-            <span id="server-host-text">Connecting...</span>
+          <span class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-zinc-200 to-violet-400 bg-clip-text text-transparent">SyncBeat</span>
+          <span class="hidden sm:inline-block ml-2 text-[10px] font-mono uppercase tracking-widest text-violet-400/80 font-semibold border border-violet-500/30 px-1.5 py-0.5 rounded-full">v1.0 Live</span>
+        </div>
+      </a>
+
+      <!-- Status Indicator & Top Actions -->
+      <div class="flex items-center gap-3">
+        <!-- Live Connection Ping -->
+        <div class="hidden sm:flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3 py-1 text-xs font-mono text-zinc-400">
+          <span id="connection-status-dot" class="h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20"></span>
+          <span>Server Sync</span>
+        </div>
+
+        <!-- Share Invite Link Button -->
+        <button id="btn-copy-invite" class="hidden flex items-center gap-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800/60 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition-all hover:border-violet-500/60 hover:bg-zinc-800 hover:text-white active:scale-95">
+          <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+          <span>Share Room</span>
+        </button>
+
+        <!-- Leave Room / Back to Lobby -->
+        <button id="btn-leave-room" class="flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-semibold text-zinc-400 transition-all hover:border-zinc-700 hover:text-zinc-200">
+          <span>Lobby</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+
+    <!-- 1. MAIN LOBBY (INITIAL SCREEN) -->
+    <div id="lobby-view" class="space-y-10">
+      <!-- Hero Banner -->
+      <div class="relative overflow-hidden rounded-3xl border border-zinc-800/80 bg-gradient-to-b from-zinc-900/80 via-zinc-900/40 to-zinc-950 p-8 sm:p-12 text-center shadow-2xl backdrop-blur-xl">
+        <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="relative z-10 max-w-3xl mx-auto space-y-4">
+          <div class="inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/10 px-3.5 py-1 text-xs font-semibold text-violet-300">
+            <span class="flex h-2 w-2 rounded-full bg-violet-400 animate-pulse"></span>
+            Server-Authoritative Real-Time Playback Engine
+          </div>
+          <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight text-white">
+            Listen Together, <span class="bg-gradient-to-r from-violet-400 via-fuchsia-400 to-indigo-400 bg-clip-text text-transparent">In Perfect Sync</span>
+          </h1>
+          <p class="text-sm sm:text-base text-zinc-400 max-w-2xl mx-auto">
+            Zero drift music rooms with synchronized YouTube playback, persistent queues, instant chat, and anti-abuse safeguards.
+          </p>
+
+          <!-- Quick Join / Create Room Tabs Card -->
+          <div class="pt-4 max-w-md mx-auto">
+            <form id="lobby-join-form" class="glass-panel p-4 rounded-2xl shadow-xl space-y-3">
+              <div class="space-y-2 text-left">
+                <label for="input-room-name" class="block text-xs font-semibold text-zinc-300">Room Name or Code</label>
+                <div class="relative">
+                  <input type="text" id="input-room-name" placeholder="e.g. Lofi Lounge or Midnight Beats" required class="w-full rounded-xl border border-zinc-700/80 bg-zinc-950/70 px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 font-medium" />
+                </div>
+              </div>
+
+              <div class="space-y-2 text-left">
+                <label for="input-nickname" class="block text-xs font-semibold text-zinc-300">Your Nickname <span class="text-zinc-500 font-normal">(optional)</span></label>
+                <input type="text" id="input-nickname" placeholder="e.g. SonicVoyager" class="w-full rounded-xl border border-zinc-700/80 bg-zinc-950/70 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 font-medium" />
+              </div>
+
+              <button type="submit" class="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 py-3 text-sm font-bold text-white shadow-lg shadow-violet-600/30 transition-all hover:brightness-110 active:scale-[0.98]">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+                Enter Room
+              </button>
+            </form>
           </div>
         </div>
       </div>
 
-      <!-- LIVE ACTIVE ROOMS SHOWCASE (Top-level, always visible on first page) -->
-      <section id="active-rooms-container" class="active-rooms-showcase">
-        <div class="active-rooms-header">
-          <div class="active-rooms-header-left">
-            <span class="live-pulse-dot"></span>
-            <h2 class="active-rooms-heading">Open Rooms on Server</h2>
-            <span id="active-rooms-count-pill" class="badge-count">Loading...</span>
+      <!-- Pre-rendered Active Rooms Showcase Header -->
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+              <span>Active Music Streams</span>
+              <span class="inline-flex items-center rounded-full bg-violet-600/20 px-2 py-0.5 text-xs font-semibold text-violet-400 border border-violet-500/30">Live Now</span>
+            </h2>
+            <p class="text-xs sm:text-sm text-zinc-400 mt-1">Pre-rendered streams with zero loading latency. Click any room to tune in instantly.</p>
           </div>
-          <button type="button" id="btn-refresh-rooms" class="btn-refresh-rooms" title="Refresh room list">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-            <span>Refresh</span>
+          <button id="btn-lobby-share" class="hidden sm:flex items-center gap-1.5 text-xs font-medium text-zinc-400 hover:text-violet-400 transition-colors">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+            <span>Copy App Link</span>
           </button>
         </div>
-        <div id="active-rooms-list" class="active-rooms-grid">
-          <!-- Live Room Cards dynamically rendered -->
-          <div class="rooms-loading-state">
-            <div class="loading-spinner-sm"></div>
-            <span>Fetching live open rooms...</span>
-          </div>
-        </div>
-      </section>
 
-      <div class="lobby-divider">
-        <span>OR JOIN BY NAME / CREATE ROOM</span>
-      </div>
-
-      <!-- Tab Selectors -->
-      <div class="lobby-tabs" role="tablist">
-        <button id="tab-join" class="tab-btn active" role="tab" aria-selected="true">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
-            <polyline points="10 17 15 12 10 7"></polyline>
-            <line x1="15" y1="12" x2="3" y2="12"></line>
-          </svg>
-          Join Room
-        </button>
-        <button id="tab-create" class="tab-btn" role="tab" aria-selected="false">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="16"></line>
-            <line x1="8" y1="12" x2="16" y2="12"></line>
-          </svg>
-          Create Room (Admin)
-        </button>
-      </div>
-
-      <!-- Join Form -->
-      <form id="join-room-form" class="auth-form">
-        <div class="form-group">
-          <label for="join-room-name">Custom Room Name</label>
-          <div class="input-icon-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-            </svg>
-            <input type="text" id="join-room-name" placeholder="e.g. dene or lofi-lounge" required autocomplete="off">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label for="join-nickname">Your Nickname (Optional)</label>
-          <div class="input-icon-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-              <circle cx="12" cy="7" r="4"></circle>
-            </svg>
-            <input type="text" id="join-nickname" placeholder="e.g. Alex" maxlength="20">
-          </div>
-        </div>
-
-        <button type="submit" id="btn-submit-join" class="btn-primary">
-          <span>Join Room & Unlock Audio</span>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-      </form>
-
-      <!-- Create Form -->
-      <form id="create-room-form" class="auth-form hidden">
-        <div class="form-group">
-          <label for="create-room-name">Custom Room Name</label>
-          <div class="input-icon-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-            </svg>
-            <input type="text" id="create-room-name" placeholder="e.g. chill-vibes" required autocomplete="off">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label for="create-nickname">Admin Host Name (Optional)</label>
-          <div class="input-icon-wrap">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-            </svg>
-            <input type="text" id="create-nickname" placeholder="e.g. DJ Spark" maxlength="20">
-          </div>
-        </div>
-
-        <button type="submit" id="btn-submit-create" class="btn-primary">
-          <span>Create Room as Admin</span>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-      </form>
-
-      <!-- Quick Demo Room Button -->
-      <div class="quick-demo-box">
-        <div class="divider"><span>OR QUICK START</span></div>
-        <button id="btn-demo-start" class="btn-secondary" type="button">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
-          Instant Demo Room ("vibes" / pass: "1234")
-        </button>
-      </div>
-
-      <div class="lobby-features">
-        <div class="feature-item">
-          <span class="badge-dot"></span>
-          <span>±1s Server Heartbeat Sync</span>
-        </div>
-        <div class="feature-item">
-          <span class="badge-dot"></span>
-          <span>Sliding-Window Rate Limiting</span>
-        </div>
-        <div class="feature-item">
-          <span class="badge-dot"></span>
-          <span>YouTube IFrame Player</span>
+        <!-- Pre-rendered Showcase Grid (Zero latency SSR inject point) -->
+        <div id="lobby-rooms-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <!-- PRE_RENDERED_ROOMS -->
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- MAIN APP ROOM DASHBOARD (Rendered underneath lobby so YouTube iframe initializes geometry) -->
-  <div id="room-dashboard" class="dashboard-wrapper">
-    <!-- Top Navigation Header -->
-    <header class="app-header">
-      <div class="header-left">
-        <div class="header-logo">
-          <div class="logo-mark small">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M9 18V5l12-2v13"></path>
-              <circle cx="6" cy="18" r="3"></circle>
-              <circle cx="18" cy="16" r="3"></circle>
-            </svg>
+
+    <!-- 2. SYNCHRONIZED ROOM DASHBOARD (ROOM VIEW) -->
+    <div id="room-view" class="hidden space-y-6">
+      <!-- Room Title & Live Bar -->
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+        <div class="flex items-center gap-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600/20 border border-violet-500/30 text-violet-400 font-bold">
+            🎵
           </div>
-          <span class="brand-text">SyncBeat</span>
-        </div>
-
-        <div class="room-indicator">
-          <span class="room-prefix">Room:</span>
-          <span id="display-room-name" class="room-name-badge">--</span>
-        </div>
-      </div>
-
-      <div class="header-center">
-        <!-- Live Sync Status Indicator -->
-        <div id="sync-status-pill" class="sync-pill synced">
-          <span class="pulse-dot"></span>
-          <span id="sync-status-text">Server Synced</span>
-          <span id="sync-drift-val" class="drift-tag">±0.0s</span>
-        </div>
-      </div>
-
-      <div class="header-right">
-        <!-- Role Badge -->
-        <div id="role-badge" class="role-badge client">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
-            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
-          </svg>
-          <span id="role-text">Guest</span>
-        </div>
-
-        <!-- Listeners Count -->
-        <div class="listeners-badge" title="Connected Listeners">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-            <circle cx="9" cy="7" r="4"></circle>
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-          </svg>
-          <span id="display-listener-count">1</span>
-        </div>
-
-        <!-- Share Link Button -->
-        <button id="btn-share-link" class="btn-share-header" title="Copy Invite Link for Friends">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-          </svg>
-          <span class="btn-share-text">Share Link</span>
-        </button>
-
-        <!-- Delete Room Button (Admin) -->
-        <button id="btn-delete-room" class="btn-icon btn-danger-icon hidden" title="Delete & Close Room (Admin)">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            <line x1="10" y1="11" x2="10" y2="17"></line>
-            <line x1="14" y1="11" x2="14" y2="17"></line>
-          </svg>
-        </button>
-
-        <!-- Leave Room Button -->
-        <button id="btn-leave-room" class="btn-icon" title="Leave Room">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-            <polyline points="16 17 21 12 16 7"></polyline>
-            <line x1="21" y1="12" x2="9" y2="12"></line>
-          </svg>
-        </button>
-      </div>
-    </header>
-
-    <!-- Main Content Grid -->
-    <main class="dashboard-grid">
-      <!-- LEFT COLUMN: PLAYER & NOW PLAYING -->
-      <section class="player-column">
-        <!-- YouTube Player Container -->
-        <div class="player-aspect-wrapper">
-          <div id="youtube-player" class="player-iframe"></div>
-          <!-- Click to Unmute Overlay for Autoplay restrictions -->
-          <div id="unmute-overlay" class="unmute-overlay hidden">
-            <button id="btn-unmute-overlay" class="btn-unmute-pulse">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-              </svg>
-              <span>Click to Unmute & Listen</span>
-            </button>
-          </div>
-          <div id="player-loading-overlay" class="player-overlay">
-            <div class="spinner"></div>
-            <p>Connecting Audio Stream...</p>
+          <div>
+            <h1 id="room-header-name" class="text-xl sm:text-2xl font-extrabold text-white tracking-tight">Music Room</h1>
+            <div class="flex items-center gap-2 text-xs text-zinc-400">
+              <span class="live-listener-count font-medium">1 listener</span>
+              <span>•</span>
+              <span class="admin-only-badge hidden text-amber-400 font-semibold flex items-center gap-1">👑 Room Host (Admin Authority)</span>
+              <span id="drift-indicator" class="hidden font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30 text-[10px]">
+                In Sync
+              </span>
+            </div>
           </div>
         </div>
 
-        <!-- Now Playing Card -->
-        <div class="now-playing-card">
-          <div class="track-header">
-            <div class="track-thumb-wrap">
-              <img id="current-track-thumb" src="https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg" alt="Track thumbnail" class="track-thumb">
-              <div id="equalizer-bars" class="equalizer active">
-                <span class="eq-bar"></span>
-                <span class="eq-bar"></span>
-                <span class="eq-bar"></span>
-                <span class="eq-bar"></span>
+        <!-- Cooldown / Rate Limit Badge -->
+        <div id="cooldown-badge" class="hidden flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 text-xs font-semibold text-amber-400">
+          <svg class="w-4 h-4 animate-spin text-amber-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+          <span>Anti-Abuse Cooldown: <span id="cooldown-seconds" class="font-mono">15s</span></span>
+        </div>
+      </div>
+
+      <!-- Main Dashboard Grid: Left Player & Controls | Right Sidebar (3 Panels) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+        <!-- LEFT COLUMN: Player, Now Playing Card, Playback Bar & Add Track (8 cols) -->
+        <div class="lg:col-span-8 space-y-5">
+          <!-- 16:9 Video Player Container -->
+          <div class="relative w-full aspect-video overflow-hidden rounded-2xl border border-zinc-800 bg-black shadow-2xl">
+            <div id="yt-player-target" class="w-full h-full"></div>
+          </div>
+
+          <!-- Now Playing Card -->
+          <div class="glass-panel rounded-2xl p-4 sm:p-5 shadow-lg border border-zinc-800/80 space-y-4">
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex items-center gap-4 overflow-hidden">
+                <img id="now-playing-thumb" src="https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg" alt="Track Thumbnail" class="h-16 w-24 rounded-xl object-cover bg-zinc-950 border border-zinc-800 flex-shrink-0" />
+                <div class="overflow-hidden space-y-1">
+                  <div class="flex items-center gap-2">
+                    <span class="inline-block text-[10px] font-mono uppercase tracking-wider text-violet-400 font-semibold bg-violet-500/10 border border-violet-500/20 px-2 py-0.5 rounded-md">Now Playing</span>
+                    <!-- Equalizer Animation Widget -->
+                    <div id="equalizer-container" class="equalizer-playing flex items-end gap-[3px] h-4">
+                      <div class="equalizer-bar bar-1"></div>
+                      <div class="equalizer-bar bar-2"></div>
+                      <div class="equalizer-bar bar-3"></div>
+                      <div class="equalizer-bar bar-4"></div>
+                      <div class="equalizer-bar bar-5"></div>
+                    </div>
+                  </div>
+                  <h2 id="now-playing-title" class="truncate text-base sm:text-lg font-bold text-white">Loading synchronized stream...</h2>
+                  <p id="now-playing-author" class="truncate text-xs sm:text-sm text-zinc-400">SyncBeat Stream</p>
+                </div>
               </div>
             </div>
 
-            <div class="track-meta">
-              <div class="track-status-tag">
-                <span id="track-playing-label" class="live-pill">PLAYING NOW</span>
-                <span id="rate-limit-pill" class="cooldown-pill hidden">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polyline points="12 6 12 12 16 14"></polyline>
-                  </svg>
-                  <span id="rate-limit-pill-text">Cooldown: 0s</span>
-                </span>
+            <!-- Scrubber Progress Bar & Time Display -->
+            <div class="space-y-1.5 pt-1">
+              <div class="relative flex items-center">
+                <div class="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+                  <div id="progress-bar" class="h-full bg-gradient-to-r from-violet-600 to-fuchsia-500 transition-all duration-300" style="width: 0%;"></div>
+                </div>
+                <!-- Interactive Scrubber (Admin Seekable) -->
+                <input type="range" id="scrubber-range" min="0" max="100" value="0" step="0.1" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" title="Scrub Track (Admin)" />
               </div>
-              <h2 id="current-track-title" class="track-title">Loading track...</h2>
-              <p id="current-track-author" class="track-author">YouTube Music Stream</p>
-            </div>
-          </div>
-
-          <!-- Synced Progress Bar -->
-          <div class="progress-section">
-            <div class="time-row">
-              <span id="time-current" class="time-mono">00:00</span>
-              <span class="server-sync-hint">Server-Authoritative Sync</span>
-              <span id="time-total" class="time-mono">--:--</span>
-            </div>
-            <div class="progress-bar-container" id="progress-container">
-              <div id="progress-bar" class="progress-fill" style="width: 0%"></div>
-            </div>
-          </div>
-
-          <!-- Controls Bar -->
-          <div class="controls-bar">
-            <div class="controls-left">
-              <!-- Play / Pause (Admin or synced toggle) -->
-              <button id="btn-toggle-play" class="control-btn primary" title="Play/Pause">
-                <svg id="icon-pause" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="4" width="4" height="16"></rect>
-                  <rect x="14" y="4" width="4" height="16"></rect>
-                </svg>
-                <svg id="icon-play" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="hidden">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-              </button>
-
-              <!-- Skip Track (Subject to Rate Limit & Lockout) -->
-              <button id="btn-skip-track" class="control-btn" title="Skip to next track in queue">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 4 15 12 5 20 5 4"></polygon>
-                  <line x1="19" y1="5" x2="19" y2="19"></line>
-                </svg>
-              </button>
-
-              <!-- Force Resync Button -->
-              <button id="btn-force-resync" class="control-btn" title="Force Resync with Server">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
-                </svg>
-                <span class="btn-label-desktop">Resync</span>
-              </button>
+              <div class="flex items-center justify-between text-xs font-mono text-zinc-500">
+                <span id="time-elapsed">0:00</span>
+                <span id="time-total">LIVE</span>
+              </div>
             </div>
 
-            <!-- Volume Control -->
-            <div class="controls-right">
-              <div class="volume-box">
-                <button id="btn-mute" class="volume-btn" title="Mute/Unmute">
-                  <svg id="icon-volume-high" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                  </svg>
-                  <svg id="icon-volume-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hidden">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <line x1="23" y1="9" x2="17" y2="15"></line>
-                    <line x1="17" y1="9" x2="23" y2="15"></line>
-                  </svg>
+            <!-- Admin Playback Bar & Local Volume -->
+            <div class="pt-3 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-4">
+              <!-- Playback Controls -->
+              <div class="flex items-center gap-2.5">
+                <!-- Play/Pause Button -->
+                <button id="btn-play-pause" class="rate-limited-action flex h-11 w-11 items-center justify-center rounded-xl bg-violet-600 text-white shadow-lg shadow-violet-600/30 transition-all hover:bg-violet-500 active:scale-95" title="Play/Pause">
+                  <svg class="w-6 h-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                 </button>
-                <input type="range" id="volume-slider" min="0" max="100" value="75" class="volume-slider">
-                <span id="volume-label" class="volume-num">75%</span>
+
+                <!-- Next / Skip Track -->
+                <button id="btn-skip" class="rate-limited-action flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-700/80 bg-zinc-800/60 text-zinc-200 transition-all hover:border-zinc-600 hover:bg-zinc-800 active:scale-95" title="Skip to Next Track">
+                  <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                </button>
+
+                <!-- Force Resync Button -->
+                <button id="btn-resync" class="flex items-center gap-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800/60 px-3 py-2 text-xs font-semibold text-zinc-300 transition-all hover:border-violet-500/50 hover:text-white active:scale-95" title="Force Resynchronize with Server">
+                  <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                  <span>Resync</span>
+                </button>
+              </div>
+
+              <!-- Volume Slider & Mute -->
+              <div class="flex items-center gap-2.5">
+                <button id="btn-mute" class="p-2 text-zinc-400 hover:text-zinc-200 rounded-lg transition-colors" title="Toggle Mute">
+                  <svg id="volume-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
+                </button>
+                <input type="range" id="volume-slider" min="0" max="100" value="80" class="w-24 sm:w-28" title="Adjust Volume" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Add Track via YouTube URL/ID Card -->
+          <div class="glass-card rounded-2xl p-4 sm:p-5 border border-zinc-800/80 space-y-3">
+            <div class="flex items-center justify-between">
+              <label for="input-track-url" class="text-xs font-bold text-zinc-200 uppercase tracking-wider flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-violet-400" fill="currentColor" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                Add YouTube Track or Stream
+              </label>
+              <span class="text-[11px] text-zinc-500 font-mono">Accepts full URL or 11-char ID</span>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-2">
+              <input type="text" id="input-track-url" placeholder="https://youtube.com/watch?v=... or 11-char Video ID" class="flex-1 rounded-xl border border-zinc-700/80 bg-zinc-950/70 px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-zinc-500 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 font-mono" />
+              <div class="flex gap-2">
+                <button type="button" id="btn-add-queue" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-violet-500/40 bg-violet-600/20 px-4 py-2 text-xs font-bold text-violet-300 hover:bg-violet-600 hover:text-white transition-all active:scale-95">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                  <span>Add to Queue</span>
+                </button>
+                <button type="button" id="btn-play-now" class="rate-limited-action flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-4 py-2 text-xs font-bold text-white hover:bg-violet-500 transition-all active:scale-95 shadow-md shadow-violet-600/20" title="Play Now immediately (Admin)">
+                  <span>Play Now</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Quick Preset Chips -->
+            <div class="pt-1 flex flex-wrap items-center gap-1.5">
+              <span class="text-[11px] text-zinc-500 mr-1">Presets:</span>
+              <div id="preset-chips" class="flex flex-wrap gap-1.5">
+                <!-- Preset chips dynamically populated -->
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Track Change Input & Anti-Abuse Status -->
-        <div class="track-input-card">
-          <div class="card-heading">
-            <div class="heading-left">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="17 8 12 3 7 8"></polyline>
-                <line x1="12" y1="3" x2="12" y2="15"></line>
-              </svg>
-              <h3>Request Track Change / Queue</h3>
-            </div>
-            <div class="rate-limit-badge" id="rate-limit-counter-box" title="Sliding window rate limit: max 2 changes per 60 seconds">
-              <span class="rate-dot"></span>
-              <span id="rate-limit-counter-text">2 / 2 changes left (60s window)</span>
-            </div>
-          </div>
 
-          <div class="url-input-row">
-            <div class="input-with-button">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="input-icon">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-              </svg>
-              <input type="text" id="input-youtube-url" placeholder="Paste YouTube link or video ID (e.g. https://youtu.be/...)" autocomplete="off">
-            </div>
-            <div class="action-buttons-group">
-              <button id="btn-play-now" class="btn-action primary" title="Change to this track immediately">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                Play Now
-              </button>
-              <button id="btn-add-queue" class="btn-action secondary" title="Add track to the room playlist">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                Add to Queue
-              </button>
-            </div>
-          </div>
-
-          <!-- Quick Presets for Instant 1-Click Testing -->
-          <div class="presets-section">
-            <span class="presets-label">1-Click Presets:</span>
-            <div class="presets-chips">
-              <button class="chip-preset" data-id="jfKfPfyJRdk" data-title="Lofi Girl Beats">☕ Lofi Beats</button>
-              <button class="chip-preset" data-id="4xDzrJKXOOY" data-title="Synthwave Radio">🌆 Synthwave</button>
-              <button class="chip-preset" data-id="Dx5qFachd3A" data-title="Coffee Shop Jazz">🎷 Cafe Jazz</button>
-              <button class="chip-preset" data-id="O_Fm2l0PZtA" data-title="Cyberpunk Chill">⚡ Cyberpunk</button>
-              <button class="chip-preset" data-id="S_MOd40zlTQ" data-title="Calm Ambient Piano">🎹 Piano Study</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- RIGHT COLUMN: PLAYLIST QUEUE & ROOM ACTIVITY -->
-      <aside class="sidebar-column">
-        <!-- Up Next Queue Card -->
-        <div class="queue-card">
-          <div class="card-heading">
-            <div class="heading-left">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="8" y1="6" x2="21" y2="6"></line>
-                <line x1="8" y1="12" x2="21" y2="12"></line>
-                <line x1="8" y1="18" x2="21" y2="18"></line>
-                <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                <line x1="3" y1="18" x2="3.01" y2="18"></line>
-              </svg>
-              <h3>Up Next Queue</h3>
-              <span id="queue-count-badge" class="pill-badge">0 tracks</span>
-            </div>
-            <div class="heading-right">
-              <button id="btn-clear-queue" class="btn-text-sm hidden" title="Clear all upcoming tracks (Admin)">Clear</button>
-            </div>
-          </div>
-
-          <div id="queue-list" class="queue-list">
-            <!-- Dynamically populated queue items -->
-            <div class="empty-state">
-              <p>Queue is empty</p>
-              <span>Add tracks using the link input above</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Connected Listeners Card -->
-        <div class="listeners-card">
-          <div class="card-heading">
-            <div class="heading-left">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                <circle cx="9" cy="7" r="4"></circle>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-              </svg>
-              <h3>Listeners in Room</h3>
-            </div>
-          </div>
-          <div id="users-list" class="users-chips-container">
-            <!-- User tags dynamically rendered -->
-          </div>
-        </div>
-
-        <!-- Room Activity Feed & Reactions -->
-        <div class="activity-card">
-          <div class="card-heading">
-            <div class="heading-left">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-              </svg>
-              <h3>Live Activity Feed</h3>
-            </div>
-          </div>
-
-          <div id="activity-feed" class="activity-feed-scroll">
-            <div class="activity-msg system">
-              <span class="activity-time">Now</span>
-              <span class="activity-body">Connected to room server. Sync engine running.</span>
-            </div>
-          </div>
-
-          <form id="chat-form" class="chat-input-row">
-            <input type="text" id="chat-input" placeholder="Send a quick shout or message..." maxlength="150" autocomplete="off">
-            <button type="submit" class="btn-chat-send" title="Send message">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
+        <!-- RIGHT COLUMN: Sidebar with 3 Panels (Queue, Listeners, Chat) (4 cols) -->
+        <div class="lg:col-span-4 glass-panel rounded-2xl border border-zinc-800/80 flex flex-col h-[650px] shadow-xl overflow-hidden">
+          <!-- Sidebar Navigation Tabs -->
+          <div class="flex border-b border-zinc-800 bg-zinc-950/40">
+            <button id="tab-btn-queue" class="flex-1 py-3 px-2 text-xs font-bold border-b-2 border-violet-500 text-violet-400 transition-colors flex items-center justify-center gap-1.5">
+              <span>Up Next</span>
+              <span id="queue-count-badge" class="rounded-full bg-violet-500/20 px-1.5 py-0.2 text-[10px] font-mono text-violet-300">0</span>
             </button>
-          </form>
-        </div>
-      </aside>
-    </main>
-  </div>
+            <button id="tab-btn-listeners" class="flex-1 py-3 px-2 text-xs font-semibold border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5">
+              <span>Listeners</span>
+              <span id="listeners-count-badge" class="rounded-full bg-zinc-800 px-1.5 py-0.2 text-[10px] font-mono text-zinc-400">1</span>
+            </button>
+            <button id="tab-btn-chat" class="flex-1 py-3 px-2 text-xs font-semibold border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5">
+              <span>Chat & Feed</span>
+            </button>
+          </div>
 
-  <!-- Load YouTube IFrame Player API -->
-  <script src="https://www.youtube.com/iframe_api"></script>
-  <!-- Load Socket.io Client -->
+          <!-- PANEL 1: Up Next Queue -->
+          <div id="tab-panel-queue" class="flex-1 overflow-y-auto p-3 space-y-2">
+            <div id="queue-list" class="space-y-2">
+              <!-- Dynamically rendered queue tracks -->
+            </div>
+          </div>
+
+          <!-- PANEL 2: Connected Listeners -->
+          <div id="tab-panel-listeners" class="hidden flex-1 overflow-y-auto p-3 space-y-2">
+            <div id="listeners-list" class="space-y-2">
+              <!-- Dynamically rendered connected listeners -->
+            </div>
+          </div>
+
+          <!-- PANEL 3: Real-Time Chat & Activity Feed -->
+          <div id="tab-panel-chat" class="hidden flex-1 flex flex-col h-full overflow-hidden">
+            <!-- Messages Container -->
+            <div id="chat-messages-container" class="flex-1 overflow-y-auto p-3 space-y-2.5">
+              <div class="text-center p-3 text-zinc-500 text-xs">
+                Welcome to SyncBeat Live Chat! Messages and announcements appear here.
+              </div>
+            </div>
+
+            <!-- Chat Input Form -->
+            <form id="chat-form" class="p-2.5 border-t border-zinc-800/80 bg-zinc-950/60 flex gap-2">
+              <input type="text" id="input-chat-message" placeholder="Type a message..." required class="flex-1 rounded-xl border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-xs text-white placeholder-zinc-500 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500" />
+              <button type="submit" class="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-violet-500 transition-colors">
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Toast Notification Stack -->
+  <div id="toast-container" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm pointer-events-none"></div>
+
+  <!-- Scripts -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Main Frontend Application Logic -->
-  <script src="/app.js"></script>
+  <script src="/js/audioUnlock.js"></script>
+  <script src="/js/syncEngine.js"></script>
+  <script src="/js/app.js"></script>
 </body>
 </html>

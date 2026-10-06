@@ -1,6 +1,0 @@
-{
-  "name": "SyncBeat - Real-Time Synchronized Music Room",
-  "description": "Full-stack real-time music room synchronization platform powered by Express, Socket.io, and the YouTube IFrame Player API with server-authoritative playback and sliding-window rate limiting.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

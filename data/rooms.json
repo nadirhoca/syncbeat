@@ -1,0 +1,87 @@
+[
+  {
+    "name": "Lofi Lounge",
+    "normalizedName": "lofi-lounge",
+    "currentVideoId": "jfKfPfyJRdk",
+    "currentTitle": "Lofi Hip Hop Radio - Beats to Relax/Study to",
+    "currentAuthor": "Lofi Girl",
+    "currentThumbnail": "https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg",
+    "startedAt": 1791162390220,
+    "isPlaying": true,
+    "pausedAtSec": 26.548,
+    "duration": 0,
+    "queue": [
+      {
+        "id": "seed-q-1",
+        "videoId": "4xDzrJKXOOY",
+        "title": "Synthwave Radio - Chill Synth / Retro Beats",
+        "author": "Lofi Girl",
+        "thumbnailUrl": "https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg",
+        "duration": 0,
+        "addedBy": "SyncBeat Curator"
+      },
+      {
+        "id": "seed-q-2",
+        "videoId": "Dx5qFachd3A",
+        "title": "Relaxing Jazz Piano Radio - Sweet Bossa Nova",
+        "author": "Cafe Music BGM",
+        "thumbnailUrl": "https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg",
+        "duration": 0,
+        "addedBy": "SyncBeat Curator"
+      },
+      {
+        "id": "3fb5beeb-d020-4cff-8ce2-d027a909a864",
+        "videoId": "5qap5aO4i9A",
+        "title": "lofi hip hop radio - beats to relax/study to",
+        "author": "Lofi Girl",
+        "thumbnailUrl": "https://i.ytimg.com/vi/5qap5aO4i9A/hqdefault.jpg",
+        "duration": 0,
+        "addedBy": "TestAdmin",
+        "addedAt": 1791162416765
+      }
+    ],
+    "createdAt": 1791162390000
+  },
+  {
+    "name": "Synthwave Radio",
+    "normalizedName": "synthwave-radio",
+    "currentVideoId": "4xDzrJKXOOY",
+    "currentTitle": "Synthwave Radio - Chill synth / retro beats",
+    "currentAuthor": "Lofi Girl",
+    "currentThumbnail": "https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg",
+    "startedAt": 1791162390000,
+    "isPlaying": true,
+    "pausedAtSec": 0,
+    "duration": 0,
+    "queue": [],
+    "createdAt": 1791162390000
+  },
+  {
+    "name": "Cafe Jazz",
+    "normalizedName": "cafe-jazz",
+    "currentVideoId": "MPb6igqqHA4",
+    "currentTitle": "Ben Seni Sevduğumi",
+    "currentAuthor": "Kazım Koyuncu - Topic",
+    "currentThumbnail": "https://i.ytimg.com/vi/MPb6igqqHA4/hqdefault.jpg",
+    "startedAt": 1791162498165,
+    "isPlaying": true,
+    "pausedAtSec": 0,
+    "duration": 245.341,
+    "queue": [],
+    "createdAt": 1791162390000
+  },
+  {
+    "name": "dene",
+    "normalizedName": "dene",
+    "currentVideoId": "Dx5qFachd3A",
+    "currentTitle": "Cafe Jazz Beats - Ambient Synchronized Stream",
+    "currentAuthor": "Dene Lounge",
+    "currentThumbnail": "https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg",
+    "startedAt": 1791162390000,
+    "isPlaying": true,
+    "pausedAtSec": 0,
+    "duration": 0,
+    "queue": [],
+    "createdAt": 1791162390000
+  }
+]

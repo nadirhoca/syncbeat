@@ -40,6 +40,9 @@ window.SyncBeatEngine = (function () {
     playerReady = true;
   }
 
+  let currentRoomNormalized = null;
+  let onTickCallbacks = [];
+
   /**
    * Authoritative sync payload received from the server
    * @param {Object} syncState 
@@ -53,6 +56,10 @@ window.SyncBeatEngine = (function () {
     duration = Number(syncState.duration) || 0;
 
     const newVideoId = syncState.currentVideoId;
+    const roomChanged = syncState.normalizedName && syncState.normalizedName !== currentRoomNormalized;
+    if (syncState.normalizedName) {
+      currentRoomNormalized = syncState.normalizedName;
+    }
 
     if (player && playerReady && typeof player.loadVideoById === 'function') {
       let currentLoaded = null;
@@ -64,11 +71,11 @@ window.SyncBeatEngine = (function () {
 
       const targetTime = calculateExpectedServerTime();
 
-      if (newVideoId && currentLoaded !== newVideoId) {
+      if (roomChanged || (newVideoId && currentLoaded !== newVideoId)) {
         currentVideoId = newVideoId;
         lastActionTime = Date.now();
 
-        console.log(`[SyncEngine] Loading track ${newVideoId} (duration=${duration}s, targetTime=${targetTime.toFixed(1)}s)`);
+        console.log(`[SyncEngine] Loading track ${newVideoId} for room "${currentRoomNormalized}" (duration=${duration}s, targetTime=${targetTime.toFixed(1)}s)`);
 
         // If finite recorded video, pass startSeconds bounded by duration
         if (duration > 0) {
@@ -249,10 +256,15 @@ window.SyncBeatEngine = (function () {
     }
   }
 
-  function setIsSeeking(seeking) {
-    isSeeking = seeking;
-    if (!seeking) {
-      lastActionTime = Date.now();
+  function stop() {
+    isPlaying = false;
+    currentVideoId = null;
+    currentRoomNormalized = null;
+    currentElapsedSec = 0;
+    if (player && playerReady && typeof player.pauseVideo === 'function') {
+      try {
+        player.pauseVideo();
+      } catch (e) {}
     }
   }
 
@@ -264,6 +276,8 @@ window.SyncBeatEngine = (function () {
     forceResync,
     onTick,
     setIsSeeking,
+    stop,
+    getCurrentRoom: () => currentRoomNormalized,
     isPlaying: () => isPlaying,
     getDuration: () => duration
   };

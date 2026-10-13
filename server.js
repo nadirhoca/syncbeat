@@ -53,7 +53,7 @@ function renderRoomsHtml(rooms) {
     const thumb = room.currentThumbnail || `https://img.youtube.com/vi/${room.currentVideoId}/hqdefault.jpg`;
 
     return `
-      <div class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm" data-room="${safeNorm}">
+      <div onclick="window.SyncBeatApp.joinRoom('${safeNorm}')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="${safeNorm}">
         <div>
           <!-- Thumbnail & Status -->
           <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
@@ -176,12 +176,34 @@ io.on('connection', (socket) => {
   socket.on('join:room', ({ roomName, nickname }) => {
     if (!roomName) return;
 
+    const cleanName = typeof roomName === 'string' ? decodeURIComponent(roomName).trim() : '';
+    if (!cleanName) return;
+    const norm = roomManager.normalize(cleanName);
+
+    // If client is already connected to this exact room, provide fresh state without cycling admin role
+    if (currentRoom && currentRoom.normalizedName === norm) {
+      if (nickname && currentListener && nickname.trim() !== currentListener.nickname) {
+        currentListener.nickname = nickname.trim();
+        const socketRoomId = `room:${currentRoom.normalizedName}`;
+        io.to(socketRoomId).emit('listeners:update', {
+          listeners: Array.from(currentRoom.listeners.values())
+        });
+      }
+      const syncState = roomManager.getSyncPayload(currentRoom);
+      socket.emit('room:joined', {
+        syncState,
+        you: currentListener,
+        cooldownRemainingSec: actionRateLimiter.getCooldown(clientKey)
+      });
+      return;
+    }
+
     // Leave any previous room
     if (currentRoom) {
       handleLeave();
     }
 
-    const { room, listener } = roomManager.joinRoom(roomName, socket.id, nickname);
+    const { room, listener } = roomManager.joinRoom(cleanName, socket.id, nickname);
     currentRoom = room;
     currentListener = listener;
 
@@ -423,13 +445,24 @@ io.on('connection', (socket) => {
     });
   });
 
+  // 11. Explicit Leave Room request from client
+  socket.on('leave:room', () => {
+    handleLeave();
+    socket.emit('room:left');
+  });
+
   // Disconnection handler
   function handleLeave() {
     if (!currentRoom) return;
+    const leavingRoom = currentRoom;
+    const socketRoomId = `room:${leavingRoom.normalizedName}`;
+
+    // Crucial: leave the socket room channel to avoid cross-room message bleed!
+    socket.leave(socketRoomId);
+
     const result = roomManager.leaveRoom(socket.id);
     if (result) {
       const { room, leavingListener, newAdmin } = result;
-      const socketRoomId = `room:${room.normalizedName}`;
 
       io.to(socketRoomId).emit('listeners:update', {
         listeners: Array.from(room.listeners.values())
@@ -451,11 +484,12 @@ io.on('connection', (socket) => {
         });
         io.to(newAdmin.id).emit('role:promoted', { role: 'admin' });
       }
-
-      io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
     }
+
     currentRoom = null;
     currentListener = null;
+
+    io.emit('lobby:rooms_update', { rooms: roomManager.getPublicRoomsSummary() });
   }
 
   socket.on('disconnect', () => {

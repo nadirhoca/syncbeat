@@ -34,6 +34,21 @@ window.SyncBeatApp = (function () {
       unmuteAndSetVolume();
     });
 
+    // Browser navigation (Back / Forward) support
+    window.addEventListener('popstate', (e) => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        if (!currentRoom || currentRoom.normalizedName !== roomParam) {
+          joinRoom(roomParam);
+        }
+      } else {
+        if (currentRoom) {
+          leaveRoom();
+        }
+      }
+    });
+
     // Check for direct room invite link query param: ?room=<name>
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
@@ -63,11 +78,21 @@ window.SyncBeatApp = (function () {
 
   // Socket.io Connection & Listeners
   function initSocket() {
-    socket = io();
+    const backendUrl = window.__SYNCBEAT_BACKEND_URL__ || undefined;
+    socket = backendUrl ? io(backendUrl) : io();
 
     socket.on('connect', () => {
       console.log('[SyncBeat] Socket connected:', socket.id);
       updateConnectionStatus(true);
+
+      // If reconnecting while already viewing a room, seamlessly rejoin
+      if (currentRoom && currentRoom.normalizedName) {
+        const storedNick = localStorage.getItem('syncbeat_nickname') || 'Guest';
+        socket.emit('join:room', {
+          roomName: currentRoom.normalizedName,
+          nickname: currentUser ? currentUser.nickname : storedNick
+        });
+      }
     });
 
     socket.on('disconnect', () => {
@@ -76,13 +101,22 @@ window.SyncBeatApp = (function () {
     });
 
     socket.on('room:joined', ({ syncState, you, cooldownRemainingSec }) => {
+      const isSwitchingRoom = !currentRoom || currentRoom.normalizedName !== syncState.normalizedName;
       currentUser = you;
       currentRole = you.role;
       currentRoom = syncState;
 
       // Update URL query without full reload
       const newUrl = `${window.location.pathname}?room=${encodeURIComponent(syncState.normalizedName)}`;
-      window.history.pushState({ room: syncState.normalizedName }, '', newUrl);
+      if (window.location.search !== `?room=${encodeURIComponent(syncState.normalizedName)}`) {
+        window.history.pushState({ room: syncState.normalizedName }, '', newUrl);
+      }
+
+      // If switching or entering a fresh room, clear previous room's chat feed
+      if (isSwitchingRoom) {
+        const chatContainer = document.getElementById('chat-messages-container');
+        if (chatContainer) chatContainer.innerHTML = '';
+      }
 
       showRoomView(syncState);
       applyRoomState(syncState);
@@ -92,6 +126,10 @@ window.SyncBeatApp = (function () {
       }
 
       showToast(`Joined ${syncState.name} as ${you.role === 'admin' ? '👑 Admin' : 'Listener'}!`, 'success');
+    });
+
+    socket.on('room:left', () => {
+      leaveRoomLocal();
     });
 
     socket.on('room:sync', (syncState) => {
@@ -529,7 +567,16 @@ window.SyncBeatApp = (function () {
     const btnLeaveRoom = document.getElementById('btn-leave-room');
     if (btnLeaveRoom) {
       btnLeaveRoom.addEventListener('click', () => {
-        window.location.href = '/';
+        leaveRoom();
+      });
+    }
+
+    // Header logo click navigates to lobby cleanly without page reload
+    const logoLink = document.querySelector('header a[href="/"]');
+    if (logoLink) {
+      logoLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        leaveRoom();
       });
     }
 
@@ -586,19 +633,82 @@ window.SyncBeatApp = (function () {
     unmuteAndSetVolume();
 
     const finalNick = nickname || localStorage.getItem('syncbeat_nickname') || 'Guest';
-    socket.emit('join:room', { roomName, nickname: finalNick });
+    const cleanRoom = typeof roomName === 'string' ? decodeURIComponent(roomName).trim() : roomName;
+    socket.emit('join:room', { roomName: cleanRoom, nickname: finalNick });
   }
 
   function showRoomView(syncState) {
     const lobbyView = document.getElementById('lobby-view');
     const roomView = document.getElementById('room-view');
     const inviteBtn = document.getElementById('btn-copy-invite');
+    const leaveBtn = document.getElementById('btn-leave-room');
 
     if (lobbyView) lobbyView.classList.add('hidden');
     if (roomView) roomView.classList.remove('hidden');
     if (inviteBtn) inviteBtn.classList.remove('hidden');
+    if (leaveBtn) {
+      leaveBtn.classList.remove('hidden');
+      leaveBtn.innerHTML = `
+        <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        <span>Leave Room</span>
+      `;
+    }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function showLobbyView() {
+    const lobbyView = document.getElementById('lobby-view');
+    const roomView = document.getElementById('room-view');
+    const inviteBtn = document.getElementById('btn-copy-invite');
+    const leaveBtn = document.getElementById('btn-leave-room');
+
+    if (roomView) roomView.classList.add('hidden');
+    if (lobbyView) lobbyView.classList.remove('hidden');
+    if (inviteBtn) inviteBtn.classList.add('hidden');
+    if (leaveBtn) leaveBtn.classList.add('hidden');
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function leaveRoom() {
+    if (socket && currentRoom) {
+      socket.emit('leave:room');
+    }
+    leaveRoomLocal();
+  }
+
+  function leaveRoomLocal() {
+    currentRoom = null;
+    currentUser = null;
+    currentRole = 'client';
+
+    // Stop playback and sync engine
+    if (window.SyncBeatEngine && typeof window.SyncBeatEngine.stop === 'function') {
+      window.SyncBeatEngine.stop();
+    }
+    if (ytPlayer) {
+      try {
+        if (typeof ytPlayer.pauseVideo === 'function') {
+          ytPlayer.pauseVideo();
+        }
+      } catch (e) {}
+    }
+
+    // Clear room data from DOM
+    const chatContainer = document.getElementById('chat-messages-container');
+    if (chatContainer) chatContainer.innerHTML = '';
+    const queueContainer = document.getElementById('queue-list');
+    if (queueContainer) queueContainer.innerHTML = '';
+    const listenersContainer = document.getElementById('listeners-list');
+    if (listenersContainer) listenersContainer.innerHTML = '';
+
+    showLobbyView();
+
+    // Reset URL to /
+    if (window.location.search) {
+      window.history.pushState({}, '', window.location.pathname);
+    }
   }
 
   function renderQueue(queue) {
@@ -766,7 +876,7 @@ window.SyncBeatApp = (function () {
       const thumb = room.currentThumbnail || `https://img.youtube.com/vi/${room.currentVideoId}/hqdefault.jpg`;
 
       return `
-        <div class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm" data-room="${safeNorm}">
+        <div onclick="window.SyncBeatApp.joinRoom('${safeNorm}')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="${safeNorm}">
           <div>
             <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
               <img src="${thumb}" alt="${escapeHtml(room.currentTitle)}" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
@@ -890,6 +1000,7 @@ window.SyncBeatApp = (function () {
   return {
     init,
     joinRoom,
+    leaveRoom,
     fillPreset,
     removeQueueItem,
     showDriftBadge,

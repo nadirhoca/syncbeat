@@ -94,6 +94,10 @@ class RoomManager {
       .replace(/^-+|-+$/g, '');
   }
 
+  normalize(name) {
+    return RoomManager.normalize(name);
+  }
+
   init() {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });

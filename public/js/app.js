@@ -78,12 +78,22 @@ window.SyncBeatApp = (function () {
 
   // Socket.io Connection & Listeners
   function initSocket() {
-    const backendUrl = window.__SYNCBEAT_BACKEND_URL__ || undefined;
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramBackend = urlParams.get('backend');
+    if (paramBackend) {
+      localStorage.setItem('syncbeat_backend_url', paramBackend.trim().replace(/\/+$/, ''));
+    }
+
+    const storedBackend = localStorage.getItem('syncbeat_backend_url');
+    const backendUrl = paramBackend || storedBackend || window.__SYNCBEAT_BACKEND_URL__ || (window.location.hostname === 'localhost' ? '' : undefined);
+
     socket = backendUrl ? io(backendUrl) : io();
 
     socket.on('connect', () => {
       console.log('[SyncBeat] Socket connected:', socket.id);
       updateConnectionStatus(true);
+      const warnBanner = document.getElementById('connection-warning-banner');
+      if (warnBanner) warnBanner.classList.add('hidden');
 
       // If reconnecting while already viewing a room, seamlessly rejoin
       if (currentRoom && currentRoom.normalizedName) {
@@ -95,9 +105,18 @@ window.SyncBeatApp = (function () {
       }
     });
 
+    socket.on('connect_error', (err) => {
+      console.warn('[SyncBeat] Socket connection error:', err);
+      updateConnectionStatus(false);
+      const warnBanner = document.getElementById('connection-warning-banner');
+      if (warnBanner) warnBanner.classList.remove('hidden');
+    });
+
     socket.on('disconnect', () => {
       console.warn('[SyncBeat] Socket disconnected');
       updateConnectionStatus(false);
+      const warnBanner = document.getElementById('connection-warning-banner');
+      if (warnBanner) warnBanner.classList.remove('hidden');
     });
 
     socket.on('room:joined', ({ syncState, you, cooldownRemainingSec }) => {
@@ -392,6 +411,11 @@ window.SyncBeatApp = (function () {
         const roomName = roomInput ? roomInput.value.trim() : '';
         const nickname = nickInput ? nickInput.value.trim() : 'Guest';
         if (roomName) {
+          if (!socket || !socket.connected) {
+            showToast('Sync server is currently offline or connecting. Check your server connection.', 'warning');
+            const warnBanner = document.getElementById('connection-warning-banner');
+            if (warnBanner) warnBanner.classList.remove('hidden');
+          }
           localStorage.setItem('syncbeat_nickname', nickname);
           joinRoom(roomName, nickname);
         }
@@ -997,10 +1021,47 @@ window.SyncBeatApp = (function () {
       .replace(/'/g, '&#39;');
   }
 
+  function copyRoomLink() {
+    if (!currentRoom) return;
+    const currentBackend = localStorage.getItem('syncbeat_backend_url');
+    let shareUrl = `${window.location.origin}/?room=${encodeURIComponent(currentRoom.normalizedName)}`;
+    if (currentBackend && !shareUrl.includes('backend=')) {
+      shareUrl += `&backend=${encodeURIComponent(currentBackend)}`;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        showToast('Invite link copied! Share it with visitors so they listen in sync.', 'success');
+      }).catch(() => {
+        prompt('Copy this room invite link to share with visitors:', shareUrl);
+      });
+    } else {
+      prompt('Copy this room invite link to share with visitors:', shareUrl);
+    }
+  }
+
+  function promptBackendUrl() {
+    const current = localStorage.getItem('syncbeat_backend_url') || '';
+    const entered = prompt(
+      'Enter your SyncBeat Node.js Server URL (e.g. https://your-server.onrender.com or http://localhost:3000):',
+      current
+    );
+    if (entered !== null) {
+      const clean = entered.trim().replace(/\/+$/, '');
+      if (clean) {
+        localStorage.setItem('syncbeat_backend_url', clean);
+      } else {
+        localStorage.removeItem('syncbeat_backend_url');
+      }
+      window.location.reload();
+    }
+  }
+
   return {
     init,
     joinRoom,
     leaveRoom,
+    copyRoomLink,
+    promptBackendUrl,
     fillPreset,
     removeQueueItem,
     showDriftBadge,

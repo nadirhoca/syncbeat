@@ -73,7 +73,7 @@
         <!-- Live Connection Ping -->
         <div class="hidden sm:flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3 py-1 text-xs font-mono text-zinc-400">
           <span id="connection-status-dot" class="h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20"></span>
-          <span>Server Sync</span>
+          <span id="connection-status-text">Live Sync</span>
         </div>
 
         <!-- Share Invite Link Button -->
@@ -114,7 +114,7 @@
 
           <!-- Quick Join / Create Room Tabs Card -->
           <div class="pt-4 max-w-md mx-auto">
-            <form id="lobby-join-form" class="glass-panel p-4 rounded-2xl shadow-xl space-y-3">
+            <form id="lobby-join-form" onsubmit="event.preventDefault(); return window.SyncBeatApp ? window.SyncBeatApp.handleJoinSubmit(event) : false;" class="glass-panel p-4 rounded-2xl shadow-xl space-y-3">
               <div class="space-y-2 text-left">
                 <label for="input-room-name" class="block text-xs font-semibold text-zinc-300">Room Name or Code</label>
                 <div class="relative">
@@ -127,7 +127,7 @@
                 <input type="text" id="input-nickname" placeholder="e.g. SonicVoyager" class="w-full rounded-xl border border-zinc-700/80 bg-zinc-950/70 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 font-medium" />
               </div>
 
-              <button type="submit" class="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 py-3 text-sm font-bold text-white shadow-lg shadow-violet-600/30 transition-all hover:brightness-110 active:scale-[0.98]">
+              <button type="submit" id="btn-enter-room" onclick="if(window.SyncBeatApp) { window.SyncBeatApp.handleJoinSubmit(event); }" class="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 py-3 text-sm font-bold text-white shadow-lg shadow-violet-600/30 transition-all hover:brightness-110 active:scale-[0.98]">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
                 Enter Room
               </button>
@@ -171,7 +171,145 @@
 
         <!-- Pre-rendered Showcase Grid (Zero latency SSR inject point) -->
         <div id="lobby-rooms-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          <!-- PRE_RENDERED_ROOMS -->
+          <!-- Room 1: Lofi Lounge -->
+          <div onclick="window.SyncBeatApp.joinRoom('lofi-lounge')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="lofi-lounge">
+            <div>
+              <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
+                <img src="https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg" alt="Lofi Hip Hop Radio" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
+                <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold backdrop-blur-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>LIVE</span>
+                </div>
+                <div class="absolute top-2.5 right-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-zinc-300 backdrop-blur-md border border-white/10">
+                  <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                  <span>14 listeners</span>
+                </div>
+                <div class="absolute bottom-2.5 left-2.5 right-2.5">
+                  <p class="truncate text-sm font-semibold text-white drop-shadow">Lofi Hip Hop Radio - Beats to Relax/Study to</p>
+                  <p class="truncate text-xs text-zinc-300 drop-shadow">Lofi Girl</p>
+                </div>
+              </div>
+              <div class="mt-3.5 flex items-center justify-between">
+                <h3 class="text-base font-bold text-white group-hover:text-violet-300 transition-colors">Lofi Lounge</h3>
+                <span class="text-xs text-zinc-400 font-mono">3 in queue</span>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-zinc-800/60">
+              <button type="button" onclick="window.SyncBeatApp.joinRoom('lofi-lounge')" class="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600/20 py-2 text-sm font-semibold text-violet-300 border border-violet-500/30 transition-all hover:bg-violet-600 hover:text-white hover:border-violet-600 hover:shadow-lg hover:shadow-violet-600/25 active:scale-[0.98]">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+                Tune In Now
+              </button>
+            </div>
+          </div>
+
+          <!-- Room 2: Synthwave Radio -->
+          <div onclick="window.SyncBeatApp.joinRoom('synthwave-radio')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="synthwave-radio">
+            <div>
+              <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
+                <img src="https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg" alt="Synthwave Radio" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
+                <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold backdrop-blur-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>LIVE</span>
+                </div>
+                <div class="absolute top-2.5 right-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-zinc-300 backdrop-blur-md border border-white/10">
+                  <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                  <span>9 listeners</span>
+                </div>
+                <div class="absolute bottom-2.5 left-2.5 right-2.5">
+                  <p class="truncate text-sm font-semibold text-white drop-shadow">Synthwave Radio - Chill Synth / Retro Beats</p>
+                  <p class="truncate text-xs text-zinc-300 drop-shadow">Lofi Girl</p>
+                </div>
+              </div>
+              <div class="mt-3.5 flex items-center justify-between">
+                <h3 class="text-base font-bold text-white group-hover:text-violet-300 transition-colors">Synthwave Radio</h3>
+                <span class="text-xs text-zinc-400 font-mono">2 in queue</span>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-zinc-800/60">
+              <button type="button" onclick="window.SyncBeatApp.joinRoom('synthwave-radio')" class="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600/20 py-2 text-sm font-semibold text-violet-300 border border-violet-500/30 transition-all hover:bg-violet-600 hover:text-white hover:border-violet-600 hover:shadow-lg hover:shadow-violet-600/25 active:scale-[0.98]">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+                Tune In Now
+              </button>
+            </div>
+          </div>
+
+          <!-- Room 3: Cafe Jazz -->
+          <div onclick="window.SyncBeatApp.joinRoom('cafe-jazz')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="cafe-jazz">
+            <div>
+              <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
+                <img src="https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg" alt="Cafe Jazz" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
+                <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold backdrop-blur-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>LIVE</span>
+                </div>
+                <div class="absolute top-2.5 right-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-zinc-300 backdrop-blur-md border border-white/10">
+                  <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                  <span>6 listeners</span>
+                </div>
+                <div class="absolute bottom-2.5 left-2.5 right-2.5">
+                  <p class="truncate text-sm font-semibold text-white drop-shadow">Relaxing Jazz Piano Radio - Sweet Bossa Nova</p>
+                  <p class="truncate text-xs text-zinc-300 drop-shadow">Cafe Music BGM</p>
+                </div>
+              </div>
+              <div class="mt-3.5 flex items-center justify-between">
+                <h3 class="text-base font-bold text-white group-hover:text-violet-300 transition-colors">Cafe Jazz</h3>
+                <span class="text-xs text-zinc-400 font-mono">1 in queue</span>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-zinc-800/60">
+              <button type="button" onclick="window.SyncBeatApp.joinRoom('cafe-jazz')" class="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600/20 py-2 text-sm font-semibold text-violet-300 border border-violet-500/30 transition-all hover:bg-violet-600 hover:text-white hover:border-violet-600 hover:shadow-lg hover:shadow-violet-600/25 active:scale-[0.98]">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+                Tune In Now
+              </button>
+            </div>
+          </div>
+
+          <!-- Room 4: Cyberpunk Beats -->
+          <div onclick="window.SyncBeatApp.joinRoom('cyberpunk-beats')" class="room-card group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-4 transition-all duration-300 hover:border-violet-500/50 hover:bg-zinc-900/90 hover:shadow-xl hover:shadow-violet-950/20 backdrop-blur-sm cursor-pointer" data-room="cyberpunk-beats">
+            <div>
+              <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-zinc-950 border border-zinc-800/50">
+                <img src="https://img.youtube.com/vi/5qap5aO4i9A/hqdefault.jpg" alt="Cyberpunk Beats" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
+                <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold backdrop-blur-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>LIVE</span>
+                </div>
+                <div class="absolute top-2.5 right-2.5 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-zinc-300 backdrop-blur-md border border-white/10">
+                  <svg class="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                  <span>11 listeners</span>
+                </div>
+                <div class="absolute bottom-2.5 left-2.5 right-2.5">
+                  <p class="truncate text-sm font-semibold text-white drop-shadow">Cyberpunk / Darksynth Radio - Electro Chill Beats</p>
+                  <p class="truncate text-xs text-zinc-300 drop-shadow">Cyber Chill Stream</p>
+                </div>
+              </div>
+              <div class="mt-3.5 flex items-center justify-between">
+                <h3 class="text-base font-bold text-white group-hover:text-violet-300 transition-colors">Cyberpunk Beats</h3>
+                <span class="text-xs text-zinc-400 font-mono">4 in queue</span>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-zinc-800/60">
+              <button type="button" onclick="window.SyncBeatApp.joinRoom('cyberpunk-beats')" class="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600/20 py-2 text-sm font-semibold text-violet-300 border border-violet-500/30 transition-all hover:bg-violet-600 hover:text-white hover:border-violet-600 hover:shadow-lg hover:shadow-violet-600/25 active:scale-[0.98]">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"></path></svg>
+                Tune In Now
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -404,8 +542,8 @@
   <!-- Scripts -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="/js/audioUnlock.js"></script>
-  <script src="/js/syncEngine.js"></script>
-  <script src="/js/app.js"></script>
+  <script src="/js/audioUnlock.js?v=2.0.2"></script>
+  <script src="/js/syncEngine.js?v=2.0.2"></script>
+  <script src="/js/app.js?v=2.0.2"></script>
 </body>
 </html>

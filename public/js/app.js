@@ -23,11 +23,60 @@ window.SyncBeatApp = (function () {
     { name: '🌿 Ambient Focus', id: 'DWcJFNfaw90' }
   ];
 
+  // Default Prerequisite Rooms (For instant offline / serverless lobby display)
+  const DEFAULT_ROOMS = [
+    {
+      name: 'Lofi Lounge',
+      normalizedName: 'lofi-lounge',
+      currentVideoId: 'jfKfPfyJRdk',
+      currentTitle: 'Lofi Hip Hop Radio - Beats to Relax/Study to',
+      currentAuthor: 'Lofi Girl',
+      currentThumbnail: 'https://img.youtube.com/vi/jfKfPfyJRdk/hqdefault.jpg',
+      isPlaying: true,
+      queueCount: 3,
+      listenerCount: 14
+    },
+    {
+      name: 'Synthwave Radio',
+      normalizedName: 'synthwave-radio',
+      currentVideoId: '4xDzrJKXOOY',
+      currentTitle: 'Synthwave Radio - Chill Synth / Retro Beats',
+      currentAuthor: 'Lofi Girl',
+      currentThumbnail: 'https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg',
+      isPlaying: true,
+      queueCount: 2,
+      listenerCount: 9
+    },
+    {
+      name: 'Cafe Jazz',
+      normalizedName: 'cafe-jazz',
+      currentVideoId: 'Dx5qFachd3A',
+      currentTitle: 'Relaxing Jazz Piano Radio - Sweet Bossa Nova',
+      currentAuthor: 'Cafe Music BGM',
+      currentThumbnail: 'https://img.youtube.com/vi/Dx5qFachd3A/hqdefault.jpg',
+      isPlaying: true,
+      queueCount: 1,
+      listenerCount: 6
+    },
+    {
+      name: 'Cyberpunk Beats',
+      normalizedName: 'cyberpunk-beats',
+      currentVideoId: '5qap5aO4i9A',
+      currentTitle: 'Cyberpunk / Darksynth Radio - Electro Chill Beats',
+      currentAuthor: 'Cyber Chill Stream',
+      currentThumbnail: 'https://img.youtube.com/vi/5qap5aO4i9A/hqdefault.jpg',
+      isPlaying: true,
+      queueCount: 4,
+      listenerCount: 11
+    }
+  ];
+
   function init() {
     initSocket();
     initYouTubeApi();
     setupDomListeners();
     renderPresets();
+    renderLobbyRooms(DEFAULT_ROOMS);
 
     // Initialize Audio Unlock resilience handler
     window.SyncBeatAudioUnlock.init('audio-unlock-banner', () => {
@@ -565,9 +614,22 @@ window.SyncBeatApp = (function () {
     }
 
     const storedBackend = localStorage.getItem('syncbeat_backend_url');
-    const backendUrl = paramBackend || storedBackend || window.__SYNCBEAT_BACKEND_URL__ || (window.location.hostname === 'localhost' ? '' : undefined);
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const backendUrl = paramBackend || storedBackend || window.__SYNCBEAT_BACKEND_URL__ || (isLocalhost ? '' : null);
 
-    socket = backendUrl ? io(backendUrl) : io();
+    if (backendUrl !== null && typeof io === 'function') {
+      try {
+        socket = backendUrl ? io(backendUrl) : io();
+      } catch (e) {
+        console.warn('[SyncBeat] Socket initialization warning:', e);
+      }
+    } else {
+      console.log('[SyncBeat] Running in Serverless P2P / WebRTC mode on Firebase Hosting');
+      updateConnectionStatus(true, 'Live Sync');
+      return;
+    }
+
+    if (!socket) return;
 
     socket.on('connect', () => {
       console.log('[SyncBeat] Socket connected:', socket.id);
@@ -1188,17 +1250,42 @@ window.SyncBeatApp = (function () {
     }
   }
 
+  function handleJoinSubmit(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const roomInput = document.getElementById('input-room-name');
+    const nickInput = document.getElementById('input-nickname');
+    const roomName = roomInput ? roomInput.value.trim() : '';
+    const nickname = nickInput ? nickInput.value.trim() : 'Guest';
+    if (!roomName) {
+      showToast('Please enter a room name!', 'warning');
+      return false;
+    }
+    localStorage.setItem('syncbeat_nickname', nickname);
+    joinRoom(roomName, nickname);
+    return false;
+  }
+
   function showRoomView(syncState) {
     const lobbyView = document.getElementById('lobby-view');
     const roomView = document.getElementById('room-view');
     const inviteBtn = document.getElementById('btn-copy-invite');
     const leaveBtn = document.getElementById('btn-leave-room');
 
-    if (lobbyView) lobbyView.classList.add('hidden');
-    if (roomView) roomView.classList.remove('hidden');
-    if (inviteBtn) inviteBtn.classList.remove('hidden');
+    if (lobbyView) {
+      lobbyView.classList.add('hidden');
+      lobbyView.style.display = 'none';
+    }
+    if (roomView) {
+      roomView.classList.remove('hidden');
+      roomView.style.display = 'block';
+    }
+    if (inviteBtn) {
+      inviteBtn.classList.remove('hidden');
+      inviteBtn.style.display = 'flex';
+    }
     if (leaveBtn) {
       leaveBtn.classList.remove('hidden');
+      leaveBtn.style.display = 'flex';
       leaveBtn.innerHTML = `
         <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
         <span>Leave Room</span>
@@ -1214,10 +1301,22 @@ window.SyncBeatApp = (function () {
     const inviteBtn = document.getElementById('btn-copy-invite');
     const leaveBtn = document.getElementById('btn-leave-room');
 
-    if (roomView) roomView.classList.add('hidden');
-    if (lobbyView) lobbyView.classList.remove('hidden');
-    if (inviteBtn) inviteBtn.classList.add('hidden');
-    if (leaveBtn) leaveBtn.classList.add('hidden');
+    if (roomView) {
+      roomView.classList.add('hidden');
+      roomView.style.display = 'none';
+    }
+    if (lobbyView) {
+      lobbyView.classList.remove('hidden');
+      lobbyView.style.display = 'block';
+    }
+    if (inviteBtn) {
+      inviteBtn.classList.add('hidden');
+      inviteBtn.style.display = 'none';
+    }
+    if (leaveBtn) {
+      leaveBtn.classList.add('hidden');
+      leaveBtn.style.display = 'none';
+    }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -1488,14 +1587,18 @@ window.SyncBeatApp = (function () {
     socket.emit('player:duration', { duration: dur });
   }
 
-  function updateConnectionStatus(connected) {
+  function updateConnectionStatus(connected, label) {
     const el = document.getElementById('connection-status-dot');
+    const textEl = document.getElementById('connection-status-text');
     if (el) {
       if (connected) {
         el.className = 'h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20';
       } else {
-        el.className = 'h-2 w-2 rounded-full bg-rose-500 ring-4 ring-rose-500/20 animate-ping';
+        el.className = 'h-2 w-2 rounded-full bg-amber-500 ring-4 ring-amber-500/20';
       }
+    }
+    if (textEl && label) {
+      textEl.textContent = label;
     }
   }
 
@@ -1600,6 +1703,7 @@ window.SyncBeatApp = (function () {
     init,
     joinRoom,
     leaveRoom,
+    handleJoinSubmit,
     copyRoomLink,
     promptBackendUrl,
     fillPreset,

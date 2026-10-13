@@ -41,7 +41,6 @@ window.SyncBeatEngine = (function () {
   }
 
   let currentRoomNormalized = null;
-  let onTickCallbacks = [];
 
   /**
    * Authoritative sync payload received from the server
@@ -248,6 +247,10 @@ window.SyncBeatEngine = (function () {
     } else {
       player.pauseVideo();
     }
+  }
+
+  function setIsSeeking(val) {
+    isSeeking = Boolean(val);
   }
 
   function onTick(callback) {

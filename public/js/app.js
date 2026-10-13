@@ -76,6 +76,486 @@ window.SyncBeatApp = (function () {
     }
   }
 
+  function extractVideoId(input) {
+    if (!input || typeof input !== 'string') return null;
+    const clean = input.trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
+    try {
+      const url = new URL(clean.startsWith('http') ? clean : 'https://' + clean);
+      if (url.hostname.includes('youtube.com')) {
+        if (url.searchParams.get('v')) return url.searchParams.get('v');
+        const pathParts = url.pathname.split('/');
+        const idx = pathParts.findIndex(p => p === 'v' || p === 'embed' || p === 'live');
+        if (idx !== -1 && pathParts[idx + 1]) return pathParts[idx + 1].slice(0, 11);
+      } else if (url.hostname.includes('youtu.be')) {
+        const id = url.pathname.slice(1).split('/')[0].split('?')[0];
+        if (id && id.length === 11) return id;
+      }
+    } catch (e) {}
+    const m = clean.match(/(?:v=|\/embed\/|\/17\/|\/v\/|https:\/\/youtu\.be\/|\/watch\?v=|\/watch\?.+&v=)([\w-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  // Standalone / P2P Fallback Engine (Runs when no Node.js backend is detected)
+  const StandaloneEngine = {
+    channel: null,
+    peer: null,
+    peerConns: [],
+    clientConn: null,
+    active: false,
+    roomData: null,
+    isHost: false,
+
+    initRoom(roomName, nickname) {
+      const cleanName = typeof roomName === 'string' ? decodeURIComponent(roomName).trim() : 'Music Room';
+      const norm = cleanName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'music-room';
+
+      const defaultVideo = PRESETS[0] ? PRESETS[0].id : 'jfKfPfyJRdk';
+      let storedRoom = null;
+      try {
+        const raw = localStorage.getItem('syncbeat_room_' + norm);
+        if (raw) storedRoom = JSON.parse(raw);
+      } catch (e) {}
+
+      const now = Date.now();
+      const initialRoom = storedRoom || {
+        name: cleanName,
+        normalizedName: norm,
+        currentVideoId: defaultVideo,
+        currentTitle: 'Lofi Hip Hop Radio - Beats to Relax/Study to',
+        currentAuthor: 'Lofi Girl',
+        currentThumbnail: `https://img.youtube.com/vi/${defaultVideo}/hqdefault.jpg`,
+        isPlaying: true,
+        startedAt: now,
+        pausedAtSec: 0,
+        duration: 0,
+        queue: [
+          {
+            id: 'q-seed-1',
+            videoId: '4xDzrJKXOOY',
+            title: 'Synthwave Radio - Chill Synth / Retro Beats',
+            author: 'Lofi Girl',
+            thumbnailUrl: 'https://img.youtube.com/vi/4xDzrJKXOOY/hqdefault.jpg',
+            duration: 0,
+            addedBy: 'SyncBeat'
+          }
+        ],
+        listeners: []
+      };
+
+      this.roomData = initialRoom;
+      this.active = true;
+
+      // BroadcastChannel for instant local multi-tab synchronization
+      if (typeof BroadcastChannel !== 'undefined') {
+        if (this.channel) this.channel.close();
+        this.channel = new BroadcastChannel('syncbeat_room_' + norm);
+        this.channel.onmessage = (event) => this.handleChannelMessage(event.data);
+      }
+
+      const user = {
+        id: 'usr-' + Math.random().toString(36).substring(2, 8),
+        nickname: nickname || localStorage.getItem('syncbeat_nickname') || 'Guest',
+        role: 'admin',
+        joinedAt: now
+      };
+
+      this.roomData.listeners = [user];
+      currentUser = user;
+      currentRole = user.role;
+
+      const syncState = this.getSyncPayload();
+      currentRoom = syncState;
+
+      const newUrl = `${window.location.pathname}?room=${encodeURIComponent(norm)}`;
+      if (window.location.search !== `?room=${encodeURIComponent(norm)}`) {
+        window.history.pushState({ room: norm }, '', newUrl);
+      }
+
+      const chatContainer = document.getElementById('chat-messages-container');
+      if (chatContainer) chatContainer.innerHTML = '';
+
+      showRoomView(syncState);
+      applyRoomState(syncState);
+
+      appendFeedItem({
+        id: 'sys-start',
+        type: 'system',
+        text: `👑 Welcome ${user.nickname}! You are the Room Admin. Share this room's invite link with visitors so they listen in sync.`,
+        timestamp: now
+      });
+
+      if (this.channel) {
+        this.channel.postMessage({ type: 'user_joined', user, syncState });
+      }
+
+      showToast(`Entered ${cleanName} as 👑 Admin!`, 'success');
+      this.saveLocal();
+
+      // Initialize WebRTC P2P (PeerJS) for cross-device sync
+      this.setupP2P(norm, user);
+    },
+
+    setupP2P(norm, user) {
+      if (typeof Peer === 'undefined') return;
+      this.closeP2P();
+
+      const hostPeerId = `syncbeat-v1-${norm}`.substring(0, 60);
+
+      try {
+        const hostPeer = new Peer(hostPeerId, { debug: 0 });
+        this.peer = hostPeer;
+
+        hostPeer.on('open', (id) => {
+          console.log('[SyncBeat P2P] Hosting room as Admin:', id);
+          this.isHost = true;
+          this.roomData.listeners = [user];
+          renderListeners(this.roomData.listeners);
+        });
+
+        hostPeer.on('connection', (conn) => {
+          console.log('[SyncBeat P2P] Visitor connected:', conn.peer);
+          this.peerConns.push(conn);
+
+          conn.on('open', () => {
+            conn.send({
+              type: 'sync',
+              syncState: this.getSyncPayload(),
+              host: currentUser
+            });
+          });
+
+          conn.on('data', (data) => {
+            if (!data) return;
+            if (data.type === 'visitor_joined' && data.user) {
+              const visitor = { ...data.user, role: 'client' };
+              if (!this.roomData.listeners.find(l => l.id === visitor.id)) {
+                this.roomData.listeners.push(visitor);
+              }
+              renderListeners(this.roomData.listeners);
+              this.broadcast({ type: 'listeners', listeners: this.roomData.listeners });
+              appendFeedItem({
+                id: 'act-' + Date.now(),
+                type: 'system',
+                text: `${visitor.nickname} joined the room as a listener.`,
+                timestamp: Date.now()
+              });
+              showToast(`${visitor.nickname} joined the room!`, 'info');
+            } else if (data.type === 'chat' && data.message) {
+              appendChatMessage(data.message);
+              this.broadcast({ type: 'chat', message: data.message }, conn);
+            } else if (data.type === 'queue_add' && data.track) {
+              this.roomData.queue.push(data.track);
+              this.saveLocal();
+              renderQueue(this.roomData.queue);
+              this.broadcast({ type: 'queue', queue: this.roomData.queue });
+              appendFeedItem({
+                id: 'act-' + Date.now(),
+                type: 'system',
+                text: `➕ ${data.track.addedBy} added "${data.track.title}" to Up Next.`,
+                timestamp: Date.now()
+              });
+            }
+          });
+
+          conn.on('close', () => {
+            this.peerConns = this.peerConns.filter(c => c !== conn);
+          });
+        });
+
+        hostPeer.on('error', (err) => {
+          if (err.type === 'unavailable-id') {
+            console.log('[SyncBeat P2P] Room host already active on another client. Connecting as visitor...');
+            hostPeer.destroy();
+            this.connectAsVisitor(hostPeerId, user);
+          } else {
+            console.warn('[SyncBeat P2P] Host peer error:', err);
+          }
+        });
+      } catch (e) {
+        console.warn('[SyncBeat P2P] Exception initializing P2P host:', e);
+      }
+    },
+
+    connectAsVisitor(hostPeerId, user) {
+      if (typeof Peer === 'undefined') return;
+      try {
+        const clientPeer = new Peer(undefined, { debug: 0 });
+        this.peer = clientPeer;
+
+        clientPeer.on('open', (myId) => {
+          console.log('[SyncBeat P2P] Connecting to room host:', hostPeerId);
+          const conn = clientPeer.connect(hostPeerId, { reliable: true });
+          this.clientConn = conn;
+
+          conn.on('open', () => {
+            console.log('[SyncBeat P2P] Connected to host!');
+            user.role = 'client';
+            currentRole = 'client';
+            currentUser = user;
+            updateAdminControlsVisibility();
+
+            conn.send({
+              type: 'visitor_joined',
+              user: currentUser
+            });
+
+            showToast('Connected to 👑 Room Host! Synchronizing playback...', 'success');
+          });
+
+          conn.on('data', (data) => {
+            if (!data) return;
+            if (data.type === 'sync' && data.syncState) {
+              currentRoom = data.syncState;
+              applyRoomState(data.syncState);
+            } else if (data.type === 'listeners' && data.listeners) {
+              if (this.roomData) this.roomData.listeners = data.listeners;
+              renderListeners(data.listeners);
+            } else if (data.type === 'queue' && data.queue) {
+              if (this.roomData) this.roomData.queue = data.queue;
+              renderQueue(data.queue);
+            } else if (data.type === 'chat' && data.message) {
+              appendChatMessage(data.message);
+            }
+          });
+
+          conn.on('close', () => {
+            showToast('Room Host disconnected. You are now the room host!', 'warning');
+            currentRole = 'admin';
+            if (currentUser) currentUser.role = 'admin';
+            updateAdminControlsVisibility();
+          });
+        });
+      } catch (e) {
+        console.warn('[SyncBeat P2P] Exception connecting as visitor:', e);
+      }
+    },
+
+    broadcast(data, excludeConn) {
+      if (this.peerConns && this.peerConns.length > 0) {
+        this.peerConns.forEach(c => {
+          if (c !== excludeConn && c.open) {
+            try { c.send(data); } catch (e) {}
+          }
+        });
+      }
+      if (this.channel) {
+        try { this.channel.postMessage(data); } catch (e) {}
+      }
+    },
+
+    getSyncPayload() {
+      if (!this.roomData) return null;
+      let elapsed = 0;
+      if (this.roomData.isPlaying) {
+        elapsed = (Date.now() - this.roomData.startedAt) / 1000;
+        if (this.roomData.duration > 0) elapsed = elapsed % this.roomData.duration;
+      } else {
+        elapsed = this.roomData.pausedAtSec;
+      }
+      return {
+        name: this.roomData.name,
+        normalizedName: this.roomData.normalizedName,
+        currentVideoId: this.roomData.currentVideoId,
+        currentTitle: this.roomData.currentTitle,
+        currentAuthor: this.roomData.currentAuthor,
+        currentThumbnail: this.roomData.currentThumbnail,
+        isPlaying: this.roomData.isPlaying,
+        serverTimestamp: Date.now(),
+        currentElapsedSec: Math.max(0, elapsed),
+        duration: this.roomData.duration || 0,
+        queue: this.roomData.queue || [],
+        listeners: this.roomData.listeners || []
+      };
+    },
+
+    saveLocal() {
+      if (!this.roomData) return;
+      try {
+        localStorage.setItem('syncbeat_room_' + this.roomData.normalizedName, JSON.stringify(this.roomData));
+      } catch (e) {}
+    },
+
+    togglePlayback(nextPlaying) {
+      if (!this.roomData) return;
+      if (nextPlaying) {
+        this.roomData.isPlaying = true;
+        this.roomData.startedAt = Date.now() - (this.roomData.pausedAtSec * 1000);
+      } else {
+        const elapsed = (Date.now() - this.roomData.startedAt) / 1000;
+        this.roomData.isPlaying = false;
+        this.roomData.pausedAtSec = Math.max(0, elapsed);
+      }
+      this.saveLocal();
+      const payload = this.getSyncPayload();
+      currentRoom = payload;
+      applyRoomState(payload);
+      this.broadcast({ type: 'sync', syncState: payload });
+
+      appendFeedItem({
+        id: 'act-' + Date.now(),
+        type: 'system',
+        text: `${currentUser ? currentUser.nickname : 'Admin'} ${nextPlaying ? 'resumed' : 'paused'} playback.`,
+        timestamp: Date.now()
+      });
+    },
+
+    seek(targetSec) {
+      if (!this.roomData) return;
+      this.roomData.startedAt = Date.now() - (targetSec * 1000);
+      this.roomData.pausedAtSec = targetSec;
+      this.saveLocal();
+      const payload = this.getSyncPayload();
+      currentRoom = payload;
+      applyRoomState(payload);
+      this.broadcast({ type: 'sync', syncState: payload });
+    },
+
+    playTrack(videoId, title, author) {
+      if (!this.roomData) return;
+      this.roomData.currentVideoId = videoId;
+      this.roomData.currentTitle = title || 'Custom Track';
+      this.roomData.currentAuthor = author || 'YouTube Stream';
+      this.roomData.currentThumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+      this.roomData.startedAt = Date.now();
+      this.roomData.pausedAtSec = 0;
+      this.roomData.isPlaying = true;
+      this.saveLocal();
+      const payload = this.getSyncPayload();
+      currentRoom = payload;
+      applyRoomState(payload);
+      this.broadcast({ type: 'sync', syncState: payload });
+
+      appendFeedItem({
+        id: 'act-' + Date.now(),
+        type: 'system',
+        text: `🎵 Now Playing: "${this.roomData.currentTitle}" (started by Admin).`,
+        timestamp: Date.now()
+      });
+    },
+
+    skip() {
+      if (!this.roomData || !this.roomData.queue || this.roomData.queue.length === 0) {
+        showToast('Queue is empty! Add songs to skip.', 'info');
+        return;
+      }
+      const next = this.roomData.queue.shift();
+      this.playTrack(next.videoId, next.title, next.author);
+      renderQueue(this.roomData.queue);
+      this.broadcast({ type: 'queue', queue: this.roomData.queue });
+    },
+
+    addToQueue(videoId, title, author) {
+      if (!this.roomData) return;
+      const track = {
+        id: 'q-' + Date.now(),
+        videoId,
+        title: title || 'YouTube Track',
+        author: author || 'YouTube',
+        thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+        duration: 0,
+        addedBy: currentUser ? currentUser.nickname : 'Guest'
+      };
+
+      if (this.clientConn && this.clientConn.open) {
+        this.clientConn.send({ type: 'queue_add', track });
+        showToast(`Sent "${track.title}" to Host Up Next queue!`, 'success');
+        return;
+      }
+
+      this.roomData.queue.push(track);
+      this.saveLocal();
+      renderQueue(this.roomData.queue);
+      this.broadcast({ type: 'queue', queue: this.roomData.queue });
+
+      appendFeedItem({
+        id: 'act-' + Date.now(),
+        type: 'system',
+        text: `➕ ${track.addedBy} added "${track.title}" to Up Next.`,
+        timestamp: Date.now()
+      });
+      showToast(`Added "${track.title}" to Up Next!`, 'success');
+    },
+
+    removeFromQueue(trackId) {
+      if (!this.roomData) return;
+      this.roomData.queue = this.roomData.queue.filter(t => t.id !== trackId);
+      this.saveLocal();
+      renderQueue(this.roomData.queue);
+      this.broadcast({ type: 'queue', queue: this.roomData.queue });
+    },
+
+    sendChat(text) {
+      const msg = {
+        id: 'msg-' + Date.now(),
+        sender: currentUser ? currentUser.nickname : 'Guest',
+        senderId: currentUser ? currentUser.id : 'me',
+        role: currentRole,
+        text,
+        timestamp: Date.now()
+      };
+      appendChatMessage(msg);
+
+      if (this.clientConn && this.clientConn.open) {
+        this.clientConn.send({ type: 'chat', message: msg });
+      } else {
+        this.broadcast({ type: 'chat', message: msg });
+      }
+    },
+
+    handleChannelMessage(data) {
+      if (!data) return;
+      if (data.type === 'sync' && data.syncState) {
+        if (currentRole !== 'admin') {
+          currentRoom = data.syncState;
+          applyRoomState(data.syncState);
+        }
+      } else if (data.type === 'chat' && data.message) {
+        appendChatMessage(data.message);
+      } else if (data.type === 'queue' && data.queue) {
+        if (this.roomData) this.roomData.queue = data.queue;
+        renderQueue(data.queue);
+      } else if (data.type === 'listeners' && data.listeners) {
+        if (this.roomData) this.roomData.listeners = data.listeners;
+        renderListeners(data.listeners);
+      } else if (data.type === 'user_joined') {
+        appendFeedItem({
+          id: 'act-' + Date.now(),
+          type: 'system',
+          text: `${data.user.nickname} joined the room.`,
+          timestamp: Date.now()
+        });
+      }
+    },
+
+    closeP2P() {
+      if (this.clientConn) {
+        try { this.clientConn.close(); } catch (e) {}
+        this.clientConn = null;
+      }
+      if (this.peerConns) {
+        this.peerConns.forEach(c => {
+          try { c.close(); } catch (e) {}
+        });
+        this.peerConns = [];
+      }
+      if (this.peer) {
+        try { this.peer.destroy(); } catch (e) {}
+        this.peer = null;
+      }
+      this.isHost = false;
+    },
+
+    leave() {
+      this.active = false;
+      this.closeP2P();
+      if (this.channel) {
+        this.channel.close();
+        this.channel = null;
+      }
+    }
+  };
+
   // Socket.io Connection & Listeners
   function initSocket() {
     const urlParams = new URLSearchParams(window.location.search);
@@ -222,12 +702,17 @@ window.SyncBeatApp = (function () {
       });
     };
 
-    // Load YouTube IFrame API script tag dynamically if not loaded
-    if (!window.YT) {
+    if (window.YT && window.YT.Player) {
+      window.onYouTubeIframeAPIReady();
+    } else if (!window.YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
       const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+      if (firstScriptTag && firstScriptTag.parentNode) {
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+      } else if (document.head) {
+        document.head.appendChild(tag);
+      }
     }
   }
 
@@ -257,7 +742,11 @@ window.SyncBeatApp = (function () {
     if (event.data === YT.PlayerState.ENDED) {
       console.log('[SyncBeat] Video ended, advancing track');
       if (currentRole === 'admin') {
-        socket.emit('playback:skip');
+        if (socket && socket.connected) {
+          socket.emit('playback:skip');
+        } else {
+          StandaloneEngine.skip();
+        }
       }
     } else if (event.data === YT.PlayerState.PLAYING) {
       // If user interacted with the player directly, unlock audio
@@ -411,11 +900,6 @@ window.SyncBeatApp = (function () {
         const roomName = roomInput ? roomInput.value.trim() : '';
         const nickname = nickInput ? nickInput.value.trim() : 'Guest';
         if (roomName) {
-          if (!socket || !socket.connected) {
-            showToast('Sync server is currently offline or connecting. Check your server connection.', 'warning');
-            const warnBanner = document.getElementById('connection-warning-banner');
-            if (warnBanner) warnBanner.classList.remove('hidden');
-          }
           localStorage.setItem('syncbeat_nickname', nickname);
           joinRoom(roomName, nickname);
         }
@@ -434,7 +918,11 @@ window.SyncBeatApp = (function () {
           return;
         }
         const nextState = !window.SyncBeatEngine.isPlaying();
-        socket.emit('playback:toggle', { isPlaying: nextState });
+        if (socket && socket.connected) {
+          socket.emit('playback:toggle', { isPlaying: nextState });
+        } else {
+          StandaloneEngine.togglePlayback(nextState);
+        }
       });
     }
 
@@ -449,7 +937,11 @@ window.SyncBeatApp = (function () {
           showToast('Only the room Admin can skip tracks.', 'warning');
           return;
         }
-        socket.emit('playback:skip');
+        if (socket && socket.connected) {
+          socket.emit('playback:skip');
+        } else {
+          StandaloneEngine.skip();
+        }
       });
     }
 
@@ -460,8 +952,13 @@ window.SyncBeatApp = (function () {
         window.SyncBeatAudioUnlock.triggerUnlock();
         unmuteAndSetVolume();
         window.SyncBeatEngine.forceResync();
-        socket.emit('sync:request');
-        showToast('Resynchronized with server stream.', 'info');
+        if (socket && socket.connected) {
+          socket.emit('sync:request');
+        } else {
+          const payload = StandaloneEngine.getSyncPayload();
+          if (payload) applyRoomState(payload);
+        }
+        showToast('Resynchronized with room stream.', 'info');
       });
     }
 
@@ -512,7 +1009,11 @@ window.SyncBeatApp = (function () {
         if (duration > 0) {
           const targetSec = (percent / 100) * duration;
           if (currentRole === 'admin') {
-            socket.emit('playback:seek', { targetSec });
+            if (socket && socket.connected) {
+              socket.emit('playback:seek', { targetSec });
+            } else {
+              StandaloneEngine.seek(targetSec);
+            }
           } else {
             showToast('Only the room Admin can seek playback.', 'warning');
             window.SyncBeatEngine.forceResync();
@@ -537,7 +1038,16 @@ window.SyncBeatApp = (function () {
           showToast('Only the room Admin can immediately play tracks. Try "Add to Queue"!', 'warning');
           return;
         }
-        socket.emit('track:play_now', { input: val });
+        if (socket && socket.connected) {
+          socket.emit('track:play_now', { input: val });
+        } else {
+          const vid = extractVideoId(val);
+          if (vid) {
+            StandaloneEngine.playTrack(vid, `YouTube Track (${vid})`, 'Direct Stream');
+          } else {
+            showToast('Invalid YouTube URL or video ID.', 'error');
+          }
+        }
         if (inputTrack) inputTrack.value = '';
       });
     }
@@ -549,7 +1059,16 @@ window.SyncBeatApp = (function () {
           showToast('Please enter a YouTube URL or 11-character video ID.', 'warning');
           return;
         }
-        socket.emit('track:add_queue', { input: val });
+        if (socket && socket.connected) {
+          socket.emit('track:add_queue', { input: val });
+        } else {
+          const vid = extractVideoId(val);
+          if (vid) {
+            StandaloneEngine.addToQueue(vid, `YouTube Track (${vid})`, 'Direct Stream');
+          } else {
+            showToast('Invalid YouTube URL or video ID.', 'error');
+          }
+        }
         if (inputTrack) inputTrack.value = '';
       });
     }
@@ -562,7 +1081,11 @@ window.SyncBeatApp = (function () {
         const inputChat = document.getElementById('input-chat-message');
         const text = inputChat ? inputChat.value.trim() : '';
         if (text) {
-          socket.emit('chat:send', { text });
+          if (socket && socket.connected) {
+            socket.emit('chat:send', { text });
+          } else {
+            StandaloneEngine.sendChat(text);
+          }
           inputChat.value = '';
         }
       });
@@ -658,7 +1181,11 @@ window.SyncBeatApp = (function () {
 
     const finalNick = nickname || localStorage.getItem('syncbeat_nickname') || 'Guest';
     const cleanRoom = typeof roomName === 'string' ? decodeURIComponent(roomName).trim() : roomName;
-    socket.emit('join:room', { roomName: cleanRoom, nickname: finalNick });
+    if (socket && socket.connected) {
+      socket.emit('join:room', { roomName: cleanRoom, nickname: finalNick });
+    } else {
+      StandaloneEngine.initRoom(cleanRoom, finalNick);
+    }
   }
 
   function showRoomView(syncState) {
@@ -696,8 +1223,11 @@ window.SyncBeatApp = (function () {
   }
 
   function leaveRoom() {
-    if (socket && currentRoom) {
+    if (socket && socket.connected && currentRoom) {
       socket.emit('leave:room');
+    }
+    if (StandaloneEngine.active) {
+      StandaloneEngine.leave();
     }
     leaveRoomLocal();
   }
@@ -775,7 +1305,11 @@ window.SyncBeatApp = (function () {
   }
 
   function removeQueueItem(trackId) {
-    socket.emit('queue:remove', { trackId });
+    if (socket && socket.connected) {
+      socket.emit('queue:remove', { trackId });
+    } else {
+      StandaloneEngine.removeFromQueue(trackId);
+    }
   }
 
   function renderListeners(listeners) {
@@ -994,13 +1528,17 @@ window.SyncBeatApp = (function () {
     `;
 
     container.appendChild(toast);
-    requestAnimationFrame(() => {
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+    raf(() => {
       toast.classList.remove('translate-y-2', 'opacity-0');
     });
 
     setTimeout(() => {
       toast.classList.add('opacity-0', 'translate-y-[-10px]');
-      setTimeout(() => toast.remove(), 300);
+      setTimeout(() => {
+        if (typeof toast.remove === 'function') toast.remove();
+        else if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 300);
     }, 4000);
   }
 
@@ -1032,10 +1570,12 @@ window.SyncBeatApp = (function () {
       navigator.clipboard.writeText(shareUrl).then(() => {
         showToast('Invite link copied! Share it with visitors so they listen in sync.', 'success');
       }).catch(() => {
-        prompt('Copy this room invite link to share with visitors:', shareUrl);
+        if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+          window.prompt('Copy this room invite link to share with visitors:', shareUrl);
+        }
       });
-    } else {
-      prompt('Copy this room invite link to share with visitors:', shareUrl);
+    } else if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+      window.prompt('Copy this room invite link to share with visitors:', shareUrl);
     }
   }
 
